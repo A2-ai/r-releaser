@@ -17,6 +17,8 @@ inputs:
   md5:
     description: 'Whether to use the --md5 flag or not'
     default: 'true'
+  user:
+    description: 'The tarball creator'
 
 outputs:
   tarball_path:

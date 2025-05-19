@@ -27573,9 +27573,20 @@ module.exports = parseParams
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const fs = __nccwpck_require__(3024);
+const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
 
 const FIELD_NAME_RE = /^([^:]+)/;
+
+function getTarballs() {
+    const items = fs.readdirSync('.');
+    const files = items.filter(item => {
+        return fs.statSync(item).isFile() && item.endsWith(".tar.gz");
+    });
+
+
+    return new Set(files);
+}
 
 function updateDescriptionFile(metadata) {
     const content = fs.readFileSync('DESCRIPTION', 'utf8');
@@ -27631,7 +27642,7 @@ function updateDescriptionFile(metadata) {
     return updatedContent;
 }
 
-function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
+function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
     let args = ['R', 'CMD', 'build', '.'];
     if (!buildVignettes) {
         args.push("--no-build-vignettes");
@@ -27641,6 +27652,9 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
     }
     if (md5) {
         args.push("--md5")
+    }
+    if (user) {
+        args.push(`--user=${user}`)
     }
 
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
@@ -27665,6 +27679,7 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
             // Child was spawned but exited with non-zero exit code
             // Error contains any stdout and stderr from the child
             const { stdout, stderr } = err;
+            console.log(err);
             throw Error(`Failed to build package:\nstdout:\n${stdout}\nstderr:${stderr}`);
         }
     }
@@ -27682,15 +27697,27 @@ try {
     const buildVignettes = core.getInput('build-vignettes') === 'true';
     const resaveData = core.getInput('resave-data') === 'true';
     const md5 = core.getInput('md5') === 'true';
+    const user = core.getInput('user') || undefined;
 
     console.log("Library:", libraryPath);
     console.log("Metadata:", metadata);
     console.log("Build vignettes:", buildVignettes);
     console.log("resave data:", resaveData);
     console.log("md5:", resaveData);
+    console.log("user:", user);
 
+    const tarballs = getTarballs();
     updateDescriptionFile(metadata);
     buildPackage(libraryPath, buildVignettes, resaveData, md5);
+    const updatedTarballs = getTarballs();
+    const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
+    if (diff.size !== 1) {
+        throw Error(`R CMD build created several tarballs: ${diff}`);
+    }
+    const [tarballName] = [...diff];
+    core.setOutput("tarball_path", path.resolve(".", tarballName));
+    core.setOutput("tarball_name", tarballName);
+
 } catch (error) {
     core.setFailed(error.message);
 }

@@ -1,0 +1,29 @@
+name: 'r-releaser source builder'
+description: 'Builds a source R package'
+
+inputs:
+  library:
+    description: 'Where are the dependencies installed'
+    required: true
+  metadata:
+    description: 'Key/value data to add to the DESCRIPTION file'
+    default: '{}'
+  build-vignettes:
+    description: 'Will use the --no-build-vignettes flag in R CMD build if set to false'
+    default: 'true'
+  resave-data:
+    description: 'Will use the --no-resave-data flag in R CMD build if set to false'
+    default: 'true'
+  md5:
+    description: 'Whether to use the --md5 flag or not'
+    default: 'true'
+
+outputs:
+  tarball_path:
+    description: 'Path to the source tarball'
+  tarball_name:
+    description: 'Name of the source tarball'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

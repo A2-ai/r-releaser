@@ -1,0 +1,26 @@
+{
+  "name": "r-releaser",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "bundle": "ncc build index.js --license ../LICENSE"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/A2-ai/r-releaser.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/A2-ai/r-releaser/issues"
+  },
+  "homepage": "https://github.com/A2-ai/r-releaser#readme",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@vercel/ncc": "^0.38.3"
+  }
+}

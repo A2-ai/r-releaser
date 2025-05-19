@@ -33,6 +33,10 @@ function updateDescriptionFile(metadata) {
     let metadataAdded = [];
     for (const field of fields) {
         let fieldName = field.match(FIELD_NAME_RE)[0];
+        // Skip remotes
+        if (fieldName.toLowerCase() === "remotes") {
+            continue;
+        }
         const key = Object.keys(metadata).find(k => k.toLowerCase() === fieldName.toLowerCase());
         if (key !== undefined) {
             updatedContent += `${fieldName}: ${metadata[key]}\n`;

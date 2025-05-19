@@ -27606,6 +27606,10 @@ function updateDescriptionFile(metadata) {
     let metadataAdded = [];
     for (const field of fields) {
         let fieldName = field.match(FIELD_NAME_RE)[0];
+        // Skip remotes
+        if (fieldName.toLowerCase() === "remotes") {
+            continue;
+        }
         const key = Object.keys(metadata).find(k => k.toLowerCase() === fieldName.toLowerCase());
         if (key !== undefined) {
             updatedContent += `${fieldName}: ${metadata[key]}\n`;
@@ -27639,7 +27643,7 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
         args.push("--md5")
     }
 
-    console.log(`Running ${args.join(" ")}`);
+    console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
 
     try {
         const stdout = execSync(args.join(" "), {
@@ -27651,7 +27655,7 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
                 "R_LIBS_USER": libraryPath,
             }
         });
-        console.log("sucess", stdout);
+        console.log("success", stdout);
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -27669,15 +27673,21 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5) {
 // For now we assume the current directory is where the DESCRIPTION file is located
 // We will a few things:
 // 1. Update DESCRIPTION file to include metadata given, git sha
-// 2. Create a MD5 file which is the md5 of the DESCRIPTION file
-// 3. Run R CMD build --no-build-vignette --no-resave-data --md5
+// 2. Run R CMD build . + some arguments depending on workflow params
 try {
     const libraryPath = core.getInput('library');
     const metadata = JSON.parse(core.getInput('metadata'));
-    metadata["SHA"] = process.env.GITHUB_SHA
+    metadata["GitOrigin"] = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
+    metadata["GitSHA"] = process.env.GITHUB_SHA
     const buildVignettes = core.getInput('build-vignettes') === 'true';
     const resaveData = core.getInput('resave-data') === 'true';
     const md5 = core.getInput('md5') === 'true';
+
+    console.log("Library:", libraryPath);
+    console.log("Metadata:", metadata);
+    console.log("Build vignettes:", buildVignettes);
+    console.log("resave data:", resaveData);
+    console.log("md5:", resaveData);
 
     updateDescriptionFile(metadata);
     buildPackage(libraryPath, buildVignettes, resaveData, md5);

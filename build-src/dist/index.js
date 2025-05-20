@@ -27660,7 +27660,7 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
 
     try {
-        const stdout = execSync(args.join(" "), {
+        execSync(args.join(" "), {
             // Capture stdout and stderr from child process. Overrides the
             // default behavior of streaming child stderr to the parent stderr
             stdio: 'pipe',
@@ -27669,7 +27669,6 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
                 "R_LIBS_USER": libraryPath,
             }
         });
-        console.log("success", stdout);
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -27685,6 +27684,18 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
     }
 }
 
+// We want a non null object where the values can only be string/number/boolea
+function validateMetadata(obj) {
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+        return false;
+    }
+
+    return Object.values(obj).every(value => {
+        const type = typeof value;
+        return type === 'string' || type === 'number' || type === 'boolean';
+    });
+}
+
 // For now we assume the current directory is where the DESCRIPTION file is located
 // We will a few things:
 // 1. Update DESCRIPTION file to include metadata given, git sha
@@ -27692,6 +27703,9 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
 try {
     const libraryPath = core.getInput('library');
     const metadata = JSON.parse(core.getInput('metadata'));
+    if (!validateMetadata(metadata)) {
+        throw Error("Metadata is not a valid object: it should only contain string/number/boolean values.");
+    }
     metadata["GitOrigin"] = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
     metadata["GitSHA"] = process.env.GITHUB_SHA
     const buildVignettes = core.getInput('build-vignettes') === 'true';

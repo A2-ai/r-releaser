@@ -93,7 +93,7 @@ function getBuildTagParts() {
 }
 
 function buildPackageBinary(libraryPath, srcTarballPath) {
-    let args = ['R', 'CMD', 'INSTALL', '-l', libraryPath, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
+    let args = ['R', 'CMD', 'INSTALL', '-l', `../${libraryPath}`, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
     const originalCwd = process.cwd();
     const tmpDir = path.join(originalCwd, 'tmp_output');
   

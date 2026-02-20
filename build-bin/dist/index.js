@@ -27721,15 +27721,13 @@ function validateMetadata(obj) {
 }
 
 // For now we assume the current directory is where the DESCRIPTION file is located
-// We will a few things:
-// 1. Update DESCRIPTION file to include metadata given, git sha
-// 2. Run R CMD build . + some arguments depending on workflow params
+// TO reapproach description modding later
 try {
     const libraryPath = core.getInput('library');
     const srcTarballPath = core.getInput('src_tarball_path');
 
     console.log("Library:", libraryPath);
-    console.log("Metadata:", metadata);
+    console.log("Src tarball path:", srcTarballPath);
 
     const tarballs = getTarballs();
     buildPackageBinary(libraryPath, srcTarballPath);

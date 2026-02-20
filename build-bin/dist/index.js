@@ -27666,7 +27666,7 @@ function getBuildTagParts() {
 }
 
 function buildPackageBinary(libraryPath, srcTarballPath) {
-    let args = ['R', 'CMD', 'install', srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
+    let args = ['R', 'CMD', 'INSTALL', srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
     const originalCwd = process.cwd();
     const tmpDir = path.join(originalCwd, 'tmp_output');
   
@@ -27721,7 +27721,7 @@ function validateMetadata(obj) {
 }
 
 // For now we assume the current directory is where the DESCRIPTION file is located
-// TO reapproach description modding later
+// TO reapproach description modding later 
 try {
     const libraryPath = core.getInput('library');
     const srcTarballPath = core.getInput('src_tarball_path');
@@ -27734,7 +27734,7 @@ try {
     const updatedTarballs = getTarballs();
     const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
     if (diff.size !== 1) {
-        throw Error(`R CMD install created duplicate tarballs: ${diff}`);
+        throw Error(`R CMD INSTALL created duplicate tarballs: ${diff}`);
     }
     const [tarballName] = [...diff];
     core.setOutput("binary_path", path.resolve(".", tarballName));

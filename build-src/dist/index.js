@@ -27665,6 +27665,7 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
             // default behavior of streaming child stderr to the parent stderr
             stdio: 'pipe',
             env: {
+                ...process.env,
                 "R_LIBS_SITE": libraryPath,
                 "R_LIBS_USER": libraryPath,
             }

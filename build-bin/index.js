@@ -92,9 +92,10 @@ function getBuildTagParts() {
     };
 }
 
-function buildPackageBinary(libraryPath, srcTarballPath) {
-    let args = ['R', 'CMD', 'INSTALL', '-l', `../${libraryPath}`, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
+function buildPackageBinary(libraryDir, srcTarballPath) {
     const originalCwd = process.cwd();
+    const libraryPath = path.resolve(originalCwd, libraryDir);
+    let args = ['R', 'CMD', 'INSTALL', '-l', libraryPath, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
     const tmpDir = path.join(originalCwd, 'tmp_output');
   
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
@@ -107,6 +108,7 @@ function buildPackageBinary(libraryPath, srcTarballPath) {
             // default behavior of streaming child stderr to the parent stderr
             stdio: 'pipe',
             env: {
+                ...process.env,
                 "R_LIBS_SITE": libraryPath,
                 "R_LIBS_USER": libraryPath,
             }

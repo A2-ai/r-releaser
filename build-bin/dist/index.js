@@ -27581,85 +27581,101 @@ const FIELD_NAME_RE = /^([^:]+)/;
 function getTarballs() {
     const items = fs.readdirSync('.');
     const files = items.filter(item => {
-        return fs.statSync(item).isFile() && item.endsWith(".tar.gz");
+        return fs.statSync(item).isFile() && 
+        (item.endsWith(".tar.gz")  || item.endsWith(".tgz") || item.endsWith(".zip"));
     });
 
 
     return new Set(files);
 }
 
-function updateDescriptionFile(metadata) {
-    const content = fs.readFileSync('DESCRIPTION', 'utf8');
-    let fields = [];
-
-    const lines = content.split('\n');
-    let currentField = ""
-    for (const line of lines) {
-        // Whitespace -> continuing the field
-        if (/^\s/.test(line)) {
-            currentField += line;
-        } else {
-            // Otherwise a new field
-            // Push previous one first
-            if (currentField) {
-                fields.push(currentField);
-            }
-            currentField = line;
+function getExtension(fileName) {
+    let found = '';
+    for (const ext of ['.tar.gz', '.tgz', '.zip']) {
+        if (fileName.endsWith(ext)) {
+            found = ext;
+            break;
         }
     }
-
-    if (currentField) {
-        fields.push(currentField);
-    }
-
-    // Then we rebuild the file, updating with our metadata if needed
-    let updatedContent = "";
-    let metadataAdded = [];
-    for (const field of fields) {
-        let fieldName = field.match(FIELD_NAME_RE)[0];
-        // Skip remotes
-        if (fieldName.toLowerCase() === "remotes") {
-            continue;
-        }
-        const key = Object.keys(metadata).find(k => k.toLowerCase() === fieldName.toLowerCase());
-        if (key !== undefined) {
-            updatedContent += `${fieldName}: ${metadata[key]}\n`;
-            metadataAdded.push(key);
-        } else {
-            updatedContent += field + '\n';
-        }
-    }
-
-    for (const [key, value] of Object.entries(metadata)) {
-        if (metadataAdded.includes(key)) {
-            continue;
-        }
-        updatedContent += `${key}: ${value}\n`;
-    }
-
-    fs.writeFileSync('DESCRIPTION', updatedContent);
-
-    return updatedContent;
+    return found;
 }
 
-function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
-    let args = ['R', 'CMD', 'build', '.'];
-    if (!buildVignettes) {
-        args.push("--no-build-vignettes");
+function addBinaryInfoToFilename(platformTag, archTag, rVersion) {
+    const items = fs.readdirSync('.');
+    const tarballName = items.find(item => {
+        return fs.statSync(item).isFile() && 
+        getExtension(item) !== '';
+    });
+    if (!tarballName) {
+        throw Error(`No tarball found`);
     }
-    if (!resaveData) {
-        args.push("--no-resave-data");
+    const extension = getExtension(tarballName);
+    const oldName = tarballName.substring(0, tarballName.indexOf(extension));
+    const newName = `${oldName}_${platformTag}_${archTag}_${rVersion}${extension}`;
+    fs.renameSync(tarballName, newName);
+    return newName;
+}
+
+function parseOsRelease() {
+    try {
+        const txt = fs.readFileSync('/etc/os-release', 'utf8');
+        const out = {};
+        for (const line of txt.split('\n')) {
+            if (!line || line.startsWith('#') || !line.includes('=')) continue;
+            const idx = line.indexOf('=');
+            const key = line.slice(0, idx);
+            const value = line.slice(idx + 1).replace(/^"|"$/g, '');
+            out[key] = value;
+        }
+        return out;
+    } catch {
+        return {};
     }
-    if (md5) {
-        args.push("--md5")
+}
+
+function getPlatformTag() {
+    if (process.platform === 'linux') {
+        const rel = parseOsRelease();
+        const id = (rel.ID || 'linux').toLowerCase();
+        const major = (rel.VERSION_ID || '0').split('.')[0];
+        return `linux_${id}${major}`; // e.g. linux_ubuntu22, linux_rhel9, linux_alma8
     }
-    if (user) {
-        args.push(`--user=${user}`)
+    if (process.platform === 'darwin') {
+        return `macos`;
+    }
+    if (process.platform === 'win32') {
+        return `windows`;
     }
 
+    return process.platform;
+}
+
+function getRMinorVersion() {
+    // e.g. 4.4.1 -> 4.4
+    const full = execSync('Rscript -e "cat(as.character(getRversion()))"', { encoding: 'utf8' }).trim();
+    const parts = full.split('.');
+    return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : full;
+}
+
+function getBuildTagParts() {
+    return {
+        platformTag: getPlatformTag(), // linux_ubuntu22 / macos14 / windows11
+        archTag: process.arch,
+        rVersion: getRMinorVersion(),
+    };
+}
+
+function buildPackageBinary(libraryDir, srcTarballPath) {
+    const originalCwd = process.cwd();
+    const libraryPath = path.resolve(originalCwd, libraryDir);
+    let args = ['R', 'CMD', 'INSTALL', '-l', libraryPath, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
+    const tmpDir = path.join(originalCwd, 'tmp_output');
+  
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
 
     try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+        process.chdir(tmpDir);
         execSync(args.join(" "), {
             // Capture stdout and stderr from child process. Overrides the
             // default behavior of streaming child stderr to the parent stderr
@@ -27670,6 +27686,12 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
                 "R_LIBS_USER": libraryPath,
             }
         });
+
+        const { platformTag, archTag, rVersion } = getBuildTagParts();
+        const filename = addBinaryInfoToFilename(platformTag, archTag, rVersion);
+        const src = path.join(tmpDir, filename);
+        const dest = path.join(originalCwd, filename);
+        fs.renameSync(src, dest);
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -27682,6 +27704,9 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
             console.log(err);
             throw Error(`Failed to build package:\nstdout:\n${stdout}\nstderr:${stderr}`);
         }
+    } finally {
+        process.chdir(originalCwd);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 }
 
@@ -27698,40 +27723,24 @@ function validateMetadata(obj) {
 }
 
 // For now we assume the current directory is where the DESCRIPTION file is located
-// We will a few things:
-// 1. Update DESCRIPTION file to include metadata given, git sha
-// 2. Run R CMD build . + some arguments depending on workflow params
+// TO reapproach description modding later 
 try {
     const libraryPath = core.getInput('library');
-    const metadata = JSON.parse(core.getInput('metadata'));
-    if (!validateMetadata(metadata)) {
-        throw Error("Metadata is not a valid object: it should only contain string/number/boolean values.");
-    }
-    metadata["GitOrigin"] = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
-    metadata["GitSHA"] = process.env.GITHUB_SHA
-    const buildVignettes = core.getInput('build-vignettes') === 'true';
-    const resaveData = core.getInput('resave-data') === 'true';
-    const md5 = core.getInput('md5') === 'true';
-    const user = core.getInput('user') || undefined;
+    const srcTarballPath = core.getInput('src_tarball_path');
 
     console.log("Library:", libraryPath);
-    console.log("Metadata:", metadata);
-    console.log("Build vignettes:", buildVignettes);
-    console.log("resave data:", resaveData);
-    console.log("md5:", resaveData);
-    console.log("user:", user);
+    console.log("Src tarball path:", srcTarballPath);
 
     const tarballs = getTarballs();
-    updateDescriptionFile(metadata);
-    buildPackage(libraryPath, buildVignettes, resaveData, md5);
+    buildPackageBinary(libraryPath, srcTarballPath);
     const updatedTarballs = getTarballs();
     const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
     if (diff.size !== 1) {
-        throw Error(`R CMD build created several tarballs: ${diff}`);
+        throw Error(`R CMD INSTALL created duplicate tarballs: ${diff}`);
     }
     const [tarballName] = [...diff];
-    core.setOutput("tarball_path", path.resolve(".", tarballName));
-    core.setOutput("tarball_name", tarballName);
+    core.setOutput("binary_path", path.resolve(".", tarballName));
+    core.setOutput("binary_name", tarballName);
 
 } catch (error) {
     core.setFailed(error.message);

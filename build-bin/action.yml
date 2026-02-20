@@ -1,0 +1,20 @@
+name: 'r-releaser binary builder'
+description: 'Builds a binary R package'
+
+inputs:
+  src_tarball_path:
+    description: 'Path to the source tarball'
+    required: true
+  library:
+    description: 'Where are the dependencies installed'
+    required: true
+
+outputs:
+  binary_path:
+    description: 'Path to the binary archive'
+  binary_name:
+    description: 'Name of the binary archive'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

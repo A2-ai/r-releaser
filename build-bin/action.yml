@@ -8,12 +8,20 @@ inputs:
   library:
     description: 'Where are the dependencies installed'
     required: true
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+    default: 'manifest.json'
+  linking_to_deps:
+    description: 'JSON array of LinkingTo dependency package names (from build-src output)'
+    default: '[]'
 
 outputs:
   binary_path:
     description: 'Path to the binary archive'
   binary_name:
     description: 'Name of the binary archive'
+  manifest_path:
+    description: 'Path to the manifest JSON file'
 
 runs:
   using: 'node20'

@@ -27530,6 +27530,67 @@ function parseParams (str) {
 module.exports = parseParams
 
 
+/***/ }),
+
+/***/ 7190:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(3024);
+
+function parseDescriptionFile(filePath) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const result = {};
+    const lines = content.split('\n');
+    let currentKey = null;
+    let currentValue = '';
+
+    for (const line of lines) {
+        if (/^\s/.test(line) && currentKey) {
+            currentValue += '\n' + line;
+        } else {
+            if (currentKey) {
+                result[currentKey] = currentValue.trim();
+            }
+            const match = line.match(/^([^:]+):\s*(.*)/);
+            if (match) {
+                currentKey = match[1].trim();
+                currentValue = match[2];
+            } else {
+                currentKey = null;
+                currentValue = '';
+            }
+        }
+    }
+    if (currentKey) {
+        result[currentKey] = currentValue.trim();
+    }
+    return result;
+}
+
+function readManifest(manifestPath) {
+    try {
+        const content = fs.readFileSync(manifestPath, 'utf8');
+        return JSON.parse(content);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            return {};
+        }
+        throw err;
+    }
+}
+
+function writeManifest(manifestPath, manifest) {
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function parseLinkingTo(value) {
+    if (!value) return [];
+    return value.split(',').map(dep => dep.trim().replace(/\s*\(.*\)/, ''));
+}
+
+module.exports = { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo };
+
+
 /***/ })
 
 /******/ 	});
@@ -27575,6 +27636,7 @@ const core = __nccwpck_require__(7484);
 const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
+const { parseDescriptionFile, readManifest, writeManifest } = __nccwpck_require__(7190);
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -27665,6 +27727,14 @@ function getBuildTagParts() {
     };
 }
 
+function decomposePlatformTag(platformTag) {
+    const match = platformTag.match(/^([^_]+)_(.+)$/);
+    if (match) {
+        return { os: match[1], os_codename: match[2] };
+    }
+    return { os: platformTag, os_codename: platformTag };
+}
+
 function buildPackageBinary(libraryDir, srcTarballPath) {
     const originalCwd = process.cwd();
     const libraryPath = path.resolve(originalCwd, libraryDir);
@@ -27692,6 +27762,7 @@ function buildPackageBinary(libraryDir, srcTarballPath) {
         const src = path.join(tmpDir, filename);
         const dest = path.join(originalCwd, filename);
         fs.renameSync(src, dest);
+        return { platformTag, archTag, rVersion };
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -27732,7 +27803,7 @@ try {
     console.log("Src tarball path:", srcTarballPath);
 
     const tarballs = getTarballs();
-    buildPackageBinary(libraryPath, srcTarballPath);
+    const buildInfo = buildPackageBinary(libraryPath, srcTarballPath);
     const updatedTarballs = getTarballs();
     const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
     if (diff.size !== 1) {
@@ -27741,6 +27812,46 @@ try {
     const [tarballName] = [...diff];
     core.setOutput("binary_path", path.resolve(".", tarballName));
     core.setOutput("binary_name", tarballName);
+
+    // Generate manifest entry for binary
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
+    const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const resolvedLibraryPath = path.resolve(libraryPath);
+
+    // Extract package name/version from source tarball filename
+    const srcTarballName = path.basename(srcTarballPath);
+    const srcMatch = srcTarballName.match(/^(.+?)_(.+?)\.tar\.gz$/);
+    const pkgName = srcMatch ? srcMatch[1] : srcTarballName;
+    const pkgVersion = srcMatch ? srcMatch[2] : 'unknown';
+
+    // Resolve versions for each LinkingTo dep from the local library
+    const linkedTo = {};
+    for (const dep of linkingToDeps) {
+        try {
+            const depDescPath = path.join(resolvedLibraryPath, dep, 'DESCRIPTION');
+            const depDesc = parseDescriptionFile(depDescPath);
+            linkedTo[dep] = depDesc['Version'] || 'unknown';
+        } catch (err) {
+            console.warn(`Warning: could not read DESCRIPTION for LinkingTo dep "${dep}": ${err.message}`);
+            linkedTo[dep] = 'unknown';
+        }
+    }
+
+    const { os, os_codename } = decomposePlatformTag(buildInfo.platformTag);
+
+    const manifest = readManifest(manifestPath);
+    manifest[tarballName] = {
+        package: pkgName,
+        version: pkgVersion,
+        type: 'binary',
+        os,
+        os_codename,
+        arch: buildInfo.archTag,
+        r_version: buildInfo.rVersion,
+        linked_to: linkedTo,
+    };
+    writeManifest(manifestPath, manifest);
+    core.setOutput("manifest_path", path.resolve(manifestPath));
 
 } catch (error) {
     core.setFailed(error.message);

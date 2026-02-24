@@ -27530,6 +27530,67 @@ function parseParams (str) {
 module.exports = parseParams
 
 
+/***/ }),
+
+/***/ 7190:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(3024);
+
+function parseDescriptionFile(filePath) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const result = {};
+    const lines = content.split('\n');
+    let currentKey = null;
+    let currentValue = '';
+
+    for (const line of lines) {
+        if (/^\s/.test(line) && currentKey) {
+            currentValue += '\n' + line;
+        } else {
+            if (currentKey) {
+                result[currentKey] = currentValue.trim();
+            }
+            const match = line.match(/^([^:]+):\s*(.*)/);
+            if (match) {
+                currentKey = match[1].trim();
+                currentValue = match[2];
+            } else {
+                currentKey = null;
+                currentValue = '';
+            }
+        }
+    }
+    if (currentKey) {
+        result[currentKey] = currentValue.trim();
+    }
+    return result;
+}
+
+function readManifest(manifestPath) {
+    try {
+        const content = fs.readFileSync(manifestPath, 'utf8');
+        return JSON.parse(content);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            return {};
+        }
+        throw err;
+    }
+}
+
+function writeManifest(manifestPath, manifest) {
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function parseLinkingTo(value) {
+    if (!value) return [];
+    return value.split(',').map(dep => dep.trim().replace(/\s*\(.*\)/, ''));
+}
+
+module.exports = { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo };
+
+
 /***/ })
 
 /******/ 	});
@@ -27575,6 +27636,7 @@ const core = __nccwpck_require__(7484);
 const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
+const { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo } = __nccwpck_require__(7190);
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -27732,6 +27794,23 @@ try {
     const [tarballName] = [...diff];
     core.setOutput("tarball_path", path.resolve(".", tarballName));
     core.setOutput("tarball_name", tarballName);
+
+    // Generate manifest entry for source tarball
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
+    const desc = parseDescriptionFile('DESCRIPTION');
+    const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
+    const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
+
+    const manifest = readManifest(manifestPath);
+    manifest[tarballName] = {
+        package: desc['Package'],
+        version: desc['Version'],
+        type: 'source',
+        needs_compilation: needsCompilation,
+    };
+    writeManifest(manifestPath, manifest);
+    core.setOutput("manifest_path", path.resolve(manifestPath));
+    core.setOutput("linking_to_deps", JSON.stringify(linkingToDeps));
 
 } catch (error) {
     core.setFailed(error.message);

@@ -2,6 +2,7 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
+const { parseDescriptionFile, readManifest, writeManifest } = require('../shared/manifest');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -92,6 +93,14 @@ function getBuildTagParts() {
     };
 }
 
+function decomposePlatformTag(platformTag) {
+    const match = platformTag.match(/^([^_]+)_(.+)$/);
+    if (match) {
+        return { os: match[1], os_codename: match[2] };
+    }
+    return { os: platformTag, os_codename: platformTag };
+}
+
 function buildPackageBinary(libraryDir, srcTarballPath) {
     const originalCwd = process.cwd();
     const libraryPath = path.resolve(originalCwd, libraryDir);
@@ -119,6 +128,7 @@ function buildPackageBinary(libraryDir, srcTarballPath) {
         const src = path.join(tmpDir, filename);
         const dest = path.join(originalCwd, filename);
         fs.renameSync(src, dest);
+        return { platformTag, archTag, rVersion };
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -159,7 +169,7 @@ try {
     console.log("Src tarball path:", srcTarballPath);
 
     const tarballs = getTarballs();
-    buildPackageBinary(libraryPath, srcTarballPath);
+    const buildInfo = buildPackageBinary(libraryPath, srcTarballPath);
     const updatedTarballs = getTarballs();
     const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
     if (diff.size !== 1) {
@@ -168,6 +178,46 @@ try {
     const [tarballName] = [...diff];
     core.setOutput("binary_path", path.resolve(".", tarballName));
     core.setOutput("binary_name", tarballName);
+
+    // Generate manifest entry for binary
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
+    const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const resolvedLibraryPath = path.resolve(libraryPath);
+
+    // Extract package name/version from source tarball filename
+    const srcTarballName = path.basename(srcTarballPath);
+    const srcMatch = srcTarballName.match(/^(.+?)_(.+?)\.tar\.gz$/);
+    const pkgName = srcMatch ? srcMatch[1] : srcTarballName;
+    const pkgVersion = srcMatch ? srcMatch[2] : 'unknown';
+
+    // Resolve versions for each LinkingTo dep from the local library
+    const linkedTo = {};
+    for (const dep of linkingToDeps) {
+        try {
+            const depDescPath = path.join(resolvedLibraryPath, dep, 'DESCRIPTION');
+            const depDesc = parseDescriptionFile(depDescPath);
+            linkedTo[dep] = depDesc['Version'] || 'unknown';
+        } catch (err) {
+            console.warn(`Warning: could not read DESCRIPTION for LinkingTo dep "${dep}": ${err.message}`);
+            linkedTo[dep] = 'unknown';
+        }
+    }
+
+    const { os, os_codename } = decomposePlatformTag(buildInfo.platformTag);
+
+    const manifest = readManifest(manifestPath);
+    manifest[tarballName] = {
+        package: pkgName,
+        version: pkgVersion,
+        type: 'binary',
+        os,
+        os_codename,
+        arch: buildInfo.archTag,
+        r_version: buildInfo.rVersion,
+        linked_to: linkedTo,
+    };
+    writeManifest(manifestPath, manifest);
+    core.setOutput("manifest_path", path.resolve(manifestPath));
 
 } catch (error) {
     core.setFailed(error.message);

@@ -2,6 +2,7 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
+const { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo } = require('../shared/manifest');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -159,6 +160,23 @@ try {
     const [tarballName] = [...diff];
     core.setOutput("tarball_path", path.resolve(".", tarballName));
     core.setOutput("tarball_name", tarballName);
+
+    // Generate manifest entry for source tarball
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
+    const desc = parseDescriptionFile('DESCRIPTION');
+    const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
+    const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
+
+    const manifest = readManifest(manifestPath);
+    manifest[tarballName] = {
+        package: desc['Package'],
+        version: desc['Version'],
+        type: 'source',
+        needs_compilation: needsCompilation,
+    };
+    writeManifest(manifestPath, manifest);
+    core.setOutput("manifest_path", path.resolve(manifestPath));
+    core.setOutput("linking_to_deps", JSON.stringify(linkingToDeps));
 
 } catch (error) {
     core.setFailed(error.message);

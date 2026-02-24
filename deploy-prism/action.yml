@@ -77,6 +77,23 @@ runs:
           exit 1
         fi
 
+    - id: prepare
+      name: Prepare binary packages
+      if: inputs.dry_run != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
+        MANIFEST="${DOWNLOAD_DIR}/manifest.json"
+        if [ ! -f "${MANIFEST}" ]; then
+          echo "::error::No manifest.json found in release assets; cannot prepare binaries"
+          exit 1
+        else
+          echo "::group::Prepare binary packages"
+          node "${{ github.action_path }}/prepare-binaries.js" "${DOWNLOAD_DIR}"
+          echo "::endgroup::"
+        fi
+
     - id: list-assets
       name: List release assets (dry-run)
       if: inputs.dry_run == 'true'

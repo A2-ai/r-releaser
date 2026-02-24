@@ -29,8 +29,13 @@ function findManifests(dir, glob) {
 }
 
 try {
-    const manifestDir = core.getInput('manifest_dir') || 'manifests';
+    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+    const manifestDirInput = core.getInput('manifest_dir') || 'manifests';
     const manifestGlob = core.getInput('manifest_glob') || '**/manifest.json';
+    const manifestDir = path.resolve(workspace, manifestDirInput);
+
+    console.log(`Workspace: ${workspace}`);
+    console.log(`Manifest directory: ${manifestDir}`);
 
     if (!fs.existsSync(manifestDir)) {
         throw new Error(`Manifest directory "${manifestDir}" does not exist`);
@@ -51,11 +56,11 @@ try {
         Object.assign(merged, data);
     }
 
-    const outputPath = 'manifest.json';
+    const outputPath = path.resolve(workspace, 'manifest.json');
     writeManifest(outputPath, merged);
     console.log(`Wrote merged manifest with ${Object.keys(merged).length} entries`);
 
-    core.setOutput('manifest_path', path.resolve(outputPath));
+    core.setOutput('manifest_path', outputPath);
 } catch (error) {
     core.setFailed(error.message);
 }

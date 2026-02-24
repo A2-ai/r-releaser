@@ -27628,17 +27628,6 @@ const { parseDescriptionFile, writeManifest } = __nccwpck_require__(7190);
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
-function getTarballs() {
-    const items = fs.readdirSync('.');
-    const files = items.filter(item => {
-        return fs.statSync(item).isFile() && 
-        (item.endsWith(".tar.gz")  || item.endsWith(".tgz") || item.endsWith(".zip"));
-    });
-
-
-    return new Set(files);
-}
-
 function getExtension(fileName) {
     let found = '';
     for (const ext of ['.tar.gz', '.tgz', '.zip']) {
@@ -27650,18 +27639,17 @@ function getExtension(fileName) {
     return found;
 }
 
-function addBinaryInfoToFilename(platformTag, archTag, rVersion) {
+function renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion) {
     const items = fs.readdirSync('.');
     const tarballName = items.find(item => {
-        return fs.statSync(item).isFile() && 
+        return fs.statSync(item).isFile() &&
         getExtension(item) !== '';
     });
     if (!tarballName) {
         throw Error(`No tarball found`);
     }
-    const extension = getExtension(tarballName);
-    const oldName = tarballName.substring(0, tarballName.indexOf(extension));
-    const newName = `${oldName}_${platformTag}_${archTag}_${rVersion}${extension}`;
+    const ext = getExtension(tarballName);
+    const newName = `${pkgName}_${pkgVersion}_${platformTag}_${archTag}_${rVersion}${ext}`;
     fs.renameSync(tarballName, newName);
     return newName;
 }
@@ -27723,12 +27711,12 @@ function decomposePlatformTag(platformTag) {
     return { os: platformTag, os_codename: platformTag };
 }
 
-function buildPackageBinary(libraryDir, srcTarballPath) {
+function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
     const originalCwd = process.cwd();
     const libraryPath = path.resolve(originalCwd, libraryDir);
     let args = ['R', 'CMD', 'INSTALL', '-l', libraryPath, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
     const tmpDir = path.join(originalCwd, 'tmp_output');
-  
+
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
 
     try {
@@ -27746,11 +27734,11 @@ function buildPackageBinary(libraryDir, srcTarballPath) {
         });
 
         const { platformTag, archTag, rVersion } = getBuildTagParts();
-        const filename = addBinaryInfoToFilename(platformTag, archTag, rVersion);
+        const filename = renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion);
         const src = path.join(tmpDir, filename);
         const dest = path.join(originalCwd, filename);
         fs.renameSync(src, dest);
-        return { platformTag, archTag, rVersion };
+        return { filename, platformTag, archTag, rVersion };
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -27790,27 +27778,20 @@ try {
     console.log("Library:", libraryPath);
     console.log("Src tarball path:", srcTarballPath);
 
-    const tarballs = getTarballs();
-    const buildInfo = buildPackageBinary(libraryPath, srcTarballPath);
-    const updatedTarballs = getTarballs();
-    const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
-    if (diff.size !== 1) {
-        throw Error(`R CMD INSTALL created duplicate tarballs: ${diff}`);
-    }
-    const [tarballName] = [...diff];
-    core.setOutput("binary_path", path.resolve(".", tarballName));
-    core.setOutput("binary_name", tarballName);
-
-    // Generate manifest entry for binary
-    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
-    const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
-    const resolvedLibraryPath = path.resolve(libraryPath);
-
     // Extract package name/version from source tarball filename
     const srcTarballName = path.basename(srcTarballPath);
     const srcMatch = srcTarballName.match(/^(.+?)_(.+?)\.tar\.gz$/);
     const pkgName = srcMatch ? srcMatch[1] : srcTarballName;
     const pkgVersion = srcMatch ? srcMatch[2] : 'unknown';
+
+    const { filename, platformTag, archTag, rVersion } = buildPackageBinary(libraryPath, srcTarballPath, pkgName, pkgVersion);
+    core.setOutput("binary_path", path.resolve(".", filename));
+    core.setOutput("binary_name", filename);
+
+    // Generate manifest entry for binary
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
+    const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const resolvedLibraryPath = path.resolve(libraryPath);
 
     // Resolve versions for each LinkingTo dep from the local library
     const linkedTo = {};
@@ -27825,17 +27806,17 @@ try {
         }
     }
 
-    const { os, os_codename } = decomposePlatformTag(buildInfo.platformTag);
+    const { os, os_codename } = decomposePlatformTag(platformTag);
 
     const manifest = {
-        [tarballName]: {
+        [filename]: {
             package: pkgName,
             version: pkgVersion,
             type: 'binary',
             os,
             os_codename,
-            arch: buildInfo.archTag,
-            r_version: buildInfo.rVersion,
+            arch: archTag,
+            r_version: rVersion,
             linked_to: linkedTo,
         },
     };

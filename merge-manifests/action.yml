@@ -1,10 +1,13 @@
 name: 'r-releaser merge manifests'
-description: 'Downloads and merges manifest artifacts produced by build-src and build-bin'
+description: 'Merges manifest JSON files produced by build-src and build-bin'
 
 inputs:
-  artifact_pattern:
-    description: 'Glob pattern to match manifest artifact names'
-    default: 'manifest-*'
+  manifest_dir:
+    description: 'Directory containing downloaded manifest artifacts'
+    default: 'manifests'
+  manifest_glob:
+    description: 'Glob pattern to find manifest files within the directory'
+    default: '**/manifest.json'
 
 outputs:
   manifest_path:

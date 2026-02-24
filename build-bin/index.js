@@ -2,7 +2,7 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
-const { parseDescriptionFile, readManifest, writeManifest } = require('../shared/manifest');
+const { parseDescriptionFile, writeManifest } = require('../shared/manifest');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -205,16 +205,17 @@ try {
 
     const { os, os_codename } = decomposePlatformTag(buildInfo.platformTag);
 
-    const manifest = readManifest(manifestPath);
-    manifest[tarballName] = {
-        package: pkgName,
-        version: pkgVersion,
-        type: 'binary',
-        os,
-        os_codename,
-        arch: buildInfo.archTag,
-        r_version: buildInfo.rVersion,
-        linked_to: linkedTo,
+    const manifest = {
+        [tarballName]: {
+            package: pkgName,
+            version: pkgVersion,
+            type: 'binary',
+            os,
+            os_codename,
+            arch: buildInfo.archTag,
+            r_version: buildInfo.rVersion,
+            linked_to: linkedTo,
+        },
     };
     writeManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));

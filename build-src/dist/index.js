@@ -27567,18 +27567,6 @@ function parseDescriptionFile(filePath) {
     return result;
 }
 
-function readManifest(manifestPath) {
-    try {
-        const content = fs.readFileSync(manifestPath, 'utf8');
-        return JSON.parse(content);
-    } catch (err) {
-        if (err.code === 'ENOENT') {
-            return {};
-        }
-        throw err;
-    }
-}
-
 function writeManifest(manifestPath, manifest) {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 }
@@ -27588,7 +27576,7 @@ function parseLinkingTo(value) {
     return value.split(',').map(dep => dep.trim().replace(/\s*\(.*\)/, ''));
 }
 
-module.exports = { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo };
+module.exports = { parseDescriptionFile, writeManifest, parseLinkingTo };
 
 
 /***/ })
@@ -27636,7 +27624,7 @@ const core = __nccwpck_require__(7484);
 const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
-const { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo } = __nccwpck_require__(7190);
+const { parseDescriptionFile, writeManifest, parseLinkingTo } = __nccwpck_require__(7190);
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -27801,12 +27789,13 @@ try {
     const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
     const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
 
-    const manifest = readManifest(manifestPath);
-    manifest[tarballName] = {
-        package: desc['Package'],
-        version: desc['Version'],
-        type: 'source',
-        needs_compilation: needsCompilation,
+    const manifest = {
+        [tarballName]: {
+            package: desc['Package'],
+            version: desc['Version'],
+            type: 'source',
+            needs_compilation: needsCompilation,
+        },
     };
     writeManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));

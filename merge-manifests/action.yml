@@ -1,0 +1,15 @@
+name: 'r-releaser merge manifests'
+description: 'Downloads and merges manifest artifacts produced by build-src and build-bin'
+
+inputs:
+  artifact_pattern:
+    description: 'Glob pattern to match manifest artifact names'
+    default: 'manifest-*'
+
+outputs:
+  manifest_path:
+    description: 'Path to the merged manifest JSON file'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

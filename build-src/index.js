@@ -2,7 +2,7 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
-const { parseDescriptionFile, readManifest, writeManifest, parseLinkingTo } = require('../shared/manifest');
+const { parseDescriptionFile, writeManifest, parseLinkingTo } = require('../shared/manifest');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -167,12 +167,13 @@ try {
     const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
     const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
 
-    const manifest = readManifest(manifestPath);
-    manifest[tarballName] = {
-        package: desc['Package'],
-        version: desc['Version'],
-        type: 'source',
-        needs_compilation: needsCompilation,
+    const manifest = {
+        [tarballName]: {
+            package: desc['Package'],
+            version: desc['Version'],
+            type: 'source',
+            needs_compilation: needsCompilation,
+        },
     };
     writeManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));

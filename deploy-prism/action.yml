@@ -134,7 +134,7 @@ runs:
           PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
         fi
 
-        UPLOAD_URL="${PRISM_API_URL}/ingest/api/packages"
+        UPLOAD_URL="${PRISM_API_URL}/packages"
 
         uploaded_count=0
         failed_count=0

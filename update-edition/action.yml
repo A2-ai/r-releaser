@@ -1,0 +1,119 @@
+name: 'Update PRISM edition'
+description: 'Updates a package version in an existing mutable PRISM edition'
+
+inputs:
+  prism_api_url:
+    description: 'Base URL of the PRISM API'
+    required: true
+  auth_token:
+    description: 'Bearer token for authenticating with PRISM'
+    required: true
+  registry:
+    description: 'Registry name (e.g. hyperion-eco)'
+    required: true
+  edition:
+    description: 'Edition name (e.g. dev)'
+    required: true
+  package_name:
+    description: 'Package to update'
+    required: true
+  package_version:
+    description: 'New version for the package'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - id: mask
+      name: Mask sensitive inputs
+      shell: bash
+      run: |
+        echo "::add-mask::${{ inputs.auth_token }}"
+
+    - id: update-edition
+      name: Update edition
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        PRISM_API_URL="${{ inputs.prism_api_url }}"
+        AUTH_TOKEN="${{ inputs.auth_token }}"
+        REGISTRY="${{ inputs.registry }}"
+        EDITION="${{ inputs.edition }}"
+        PACKAGE="${{ inputs.package_name }}"
+        VERSION="${{ inputs.package_version }}"
+
+        EDITION_URL="${PRISM_API_URL}/registries/${REGISTRY}/editions/${EDITION}"
+
+        echo "::group::Update edition (registry: ${REGISTRY}, edition: ${EDITION}, package: ${PACKAGE}, version: ${VERSION})"
+
+        # 1. GET current edition
+        if ! response=$(curl -sS -w "\n%{http_code}" \
+          -H "Authorization: Bearer ${AUTH_TOKEN}" \
+          "${EDITION_URL}"); then
+          echo "::error::GET ${EDITION_URL} failed (connection/DNS/TLS error)"
+          exit 1
+        fi
+
+        http_code=$(echo "$response" | tail -n1)
+        body=$(echo "$response" | sed '$d')
+
+        if [[ "$http_code" -ne 200 ]]; then
+          echo "::error::GET ${EDITION_URL} returned ${http_code}"
+          echo "$body"
+          exit 1
+        fi
+
+        # 2. Verify edition is mutable
+        if [[ "$(echo "$body" | jq -r '.mutable')" != "true" ]]; then
+          echo "::error::Edition ${REGISTRY}/${EDITION} is immutable and cannot be updated"
+          exit 1
+        fi
+
+        # 3. Verify package exists in edition
+        if ! echo "$body" | jq -e --arg pkg "$PACKAGE" '.packages[] | select(.name == $pkg)' > /dev/null 2>&1; then
+          echo "::error::Package '${PACKAGE}' not found in ${REGISTRY}/${EDITION}"
+          exit 1
+        fi
+
+        # 4. Build PUT body:
+        #    - Target package: set new version, drop linkedToHash (let server resolve latest binary)
+        #    - Other packages: preserve version and linkedToHash (converted from response map to request array)
+        #    - Preserve existing platforms from the edition
+        put_body=$(echo "$body" | jq --arg pkg "$PACKAGE" --arg ver "$VERSION" '{
+          packages: [.packages[] | if .name == $pkg then
+            {name, version: $ver}
+          else
+            {name, version} + (if .linkedToHash then
+              {linkedToHash: [.linkedToHash | to_entries[] | {r_version: .key, hash: .value}]}
+            else {} end)
+          end],
+          platforms: [.platforms[] | {os, r_version, codename, architecture}]
+        }')
+
+        echo "PUT body:"
+        echo "$put_body" | jq .
+
+        # 5. PUT updated edition
+        if ! put_response=$(curl -sS -w "\n%{http_code}" -X PUT \
+          -H "Authorization: Bearer ${AUTH_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "$put_body" \
+          "${EDITION_URL}"); then
+          echo "::error::PUT ${EDITION_URL} failed (connection/DNS/TLS error)"
+          exit 1
+        fi
+
+        put_http_code=$(echo "$put_response" | tail -n1)
+        put_body_resp=$(echo "$put_response" | sed '$d')
+
+        if [[ "$put_http_code" -ne 200 ]]; then
+          echo "::error::PUT ${EDITION_URL} returned ${put_http_code}"
+          echo "$put_body_resp"
+          exit 1
+        fi
+
+        echo "Updated ${PACKAGE} to ${VERSION} in ${REGISTRY}/${EDITION}"
+        echo "$put_body_resp"
+
+        echo "::endgroup::"

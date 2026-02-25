@@ -88,8 +88,9 @@ runs:
           -H "Authorization: Bearer ${AUTH_TOKEN}")
 
         if [ "${EDITION_CODE}" -eq 200 ]; then
-          echo "::error::Edition ${PACKAGE_VERSION} already exists"
-          exit 1
+          echo "::notice::Edition ${PACKAGE_VERSION} already exists — skipping creation"
+          echo "::endgroup::"
+          exit 0
         elif [ "${EDITION_CODE}" -ne 404 ]; then
           echo "::error::Failed to check edition (HTTP ${EDITION_CODE})"
           cat /tmp/edition_response.json

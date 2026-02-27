@@ -27795,6 +27795,7 @@ try {
             version: desc['Version'],
             type: 'source',
             needs_compilation: needsCompilation,
+            ...metadata,
         },
     };
     writeManifest(manifestPath, manifest);

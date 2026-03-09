@@ -27579,6 +27579,14 @@ function parseLinkingTo(value) {
 module.exports = { parseDescriptionFile, writeManifest, parseLinkingTo };
 
 
+/***/ }),
+
+/***/ 2459:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('["base","compiler","datasets","graphics","grDevices","grid","methods","parallel","splines","stats","stats4","tcltk","tools","utils","boot","class","cluster","codetools","foreign","KernSmooth","lattice","MASS","Matrix","mgcv","nlme","nnet","rpart","spatial","survival"]');
+
 /***/ })
 
 /******/ 	});
@@ -27625,6 +27633,7 @@ const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
 const { parseDescriptionFile, writeManifest } = __nccwpck_require__(7190);
+const builtinPackages = __nccwpck_require__(2459);
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -27791,11 +27800,15 @@ try {
     // Generate manifest entry for binary
     const manifestPath = core.getInput('manifest_path') || 'manifest.json';
     const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const includeBuiltinLinkingToDeps = core.getInput('include_builtin_linking_to_deps') === 'true';
     const resolvedLibraryPath = path.resolve(libraryPath);
 
     // Resolve versions for each LinkingTo dep from the local library
     const linkedTo = {};
     for (const dep of linkingToDeps) {
+        if (includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
+            continue;
+        }
         try {
             const depDescPath = path.join(resolvedLibraryPath, dep, 'DESCRIPTION');
             const depDesc = parseDescriptionFile(depDescPath);

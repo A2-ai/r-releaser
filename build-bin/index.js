@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
 const { parseDescriptionFile, writeManifest } = require('../shared/manifest');
+const builtinPackages = require('./builtin_packages.json');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -169,11 +170,15 @@ try {
     // Generate manifest entry for binary
     const manifestPath = core.getInput('manifest_path') || 'manifest.json';
     const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const includeBuiltinLinkingToDeps = core.getInput('include_builtin_linking_to_deps') === 'true';
     const resolvedLibraryPath = path.resolve(libraryPath);
 
     // Resolve versions for each LinkingTo dep from the local library
     const linkedTo = {};
     for (const dep of linkingToDeps) {
+        if (includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
+            continue;
+        }
         try {
             const depDescPath = path.join(resolvedLibraryPath, dep, 'DESCRIPTION');
             const depDesc = parseDescriptionFile(depDescPath);

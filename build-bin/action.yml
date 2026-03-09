@@ -14,6 +14,9 @@ inputs:
   linking_to_deps:
     description: 'JSON array of LinkingTo dependency package names (from build-src output)'
     default: '[]'
+  include_builtin_linking_to_deps:
+    description: 'Whether to include packages built into R as specific linking to dependencies'
+    default: 'false'
 
 outputs:
   binary_path:

@@ -149,6 +149,15 @@ runs:
           local attempt=0
           local wait_seconds=2
 
+          # If the manifest marks this package as having no system dependencies
+          # beyond core runtime libs, tell the API via a query parameter.
+          local query=""
+          local no_sys_deps
+          no_sys_deps=$(jq -r --arg f "${file_name}" '.[$f].no_sys_deps // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+          if [ "${no_sys_deps}" = "true" ]; then
+            query="?no_sys_deps=true"
+          fi
+
           # Retry policy:
           # - 2xx: success
           # - 409: idempotent success (already uploaded)
@@ -171,7 +180,7 @@ runs:
               -H "Content-Type: application/octet-stream" \
               -H "X-Filename: ${file_name}" \
               --data-binary "@${file_path}" \
-              "${UPLOAD_URL}" || true)
+              "${UPLOAD_URL}${query}" || true)
 
             local response_body
             response_body=$(cat "${response_file}" 2>/dev/null || echo "")

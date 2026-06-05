@@ -4,6 +4,7 @@ const path = require('path');
 const { execSync } = require('node:child_process');
 const { parseDescriptionFile, writeManifest } = require('../shared/manifest');
 const builtinPackages = require('./builtin_packages.json');
+const coreRuntimeLibs = require('./core_runtime_libs.json');
 
 const FIELD_NAME_RE = /^([^:]+)/;
 
@@ -136,6 +137,44 @@ function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
     }
 }
 
+// Determine whether the installed package's shared objects link only to core
+// runtime libraries (no external system dependencies). Mirrors raybuilder's
+// pkg_links_to_sys_deps()/CORE_RUNTIME_LIBS. Linux (ELF) only: returns
+// undefined on other platforms so the manifest field is omitted.
+function checkNoSysDeps(libraryPath, pkgName) {
+    if (process.platform !== 'linux') {
+        return undefined;
+    }
+    try {
+        const libsDir = path.join(libraryPath, pkgName, 'libs');
+        if (!fs.existsSync(libsDir)) {
+            // No compiled code => no system dependencies
+            return true;
+        }
+        const soFiles = fs.readdirSync(libsDir).filter(f => f.endsWith('.so'));
+        if (soFiles.length === 0) {
+            return true;
+        }
+        for (const soFile of soFiles) {
+            const soPath = path.join(libsDir, soFile);
+            const out = execSync(`readelf -d "${soPath}"`, { encoding: 'utf8', stdio: 'pipe' });
+            const needed = [...out.matchAll(/\(NEEDED\)\s+Shared library:\s+\[([^\]]+)\]/g)]
+                .map(m => m[1]);
+            const sysDeps = needed.filter(lib => !coreRuntimeLibs.includes(lib));
+            if (sysDeps.length > 0) {
+                console.log(`${soFile} links to system dependencies: ${sysDeps.join(', ')}`);
+                return false;
+            }
+        }
+        console.log(`${pkgName} does not link to system dependencies`);
+        return true;
+    } catch (err) {
+        // Fail safe: assume the package has system dependencies
+        console.warn(`Warning: could not check system dependencies for "${pkgName}": ${err.message}`);
+        return false;
+    }
+}
+
 // We want a non null object where the values can only be string/number/boolea
 function validateMetadata(obj) {
     if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
@@ -190,6 +229,7 @@ try {
     }
 
     const { os, os_codename } = decomposePlatformTag(platformTag);
+    const noSysDeps = checkNoSysDeps(resolvedLibraryPath, pkgName);
 
     const manifest = {
         [filename]: {
@@ -201,6 +241,7 @@ try {
             arch: archTag,
             r_version: rVersion,
             linked_to: linkedTo,
+            ...(noSysDeps !== undefined ? { no_sys_deps: noSysDeps } : {}),
         },
     };
     writeManifest(manifestPath, manifest);

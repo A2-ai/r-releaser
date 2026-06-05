@@ -23,6 +23,14 @@ inputs:
     description: 'If true, lists release assets without uploading'
     required: false
     default: 'false'
+  skip:
+    description: >-
+      Comma-separated skip rules. Each rule is one or more tokens joined with "+" (AND);
+      rules are OR-ed. Tokens match a manifest entry's os, os_codename, or r_version.
+      e.g. "windows+4.3, ubuntu22, 4.2" skips windows builds on R 4.3, all ubuntu22 builds,
+      and all R 4.2 builds.
+    required: false
+    default: ''
 
 outputs:
   uploaded-count:
@@ -74,6 +82,8 @@ runs:
       name: Prepare binary packages
       if: inputs.dry_run != 'true'
       shell: bash
+      env:
+        SKIP_RULES: ${{ inputs.skip }}
       run: |
         set -euo pipefail
         DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"

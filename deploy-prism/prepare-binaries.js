@@ -165,6 +165,29 @@ function processEntry(downloadDir, filename, entry) {
     }
 }
 
+function parseSkipRules(raw) {
+    // "windows+4.3, ubuntu22, 4.2" -> [["windows", "4.3"], ["ubuntu22"], ["4.2"]]
+    // Rules are OR-ed; tokens within a rule are AND-ed.
+    return (raw || '')
+        .split(',')
+        .map(rule => rule
+            .split('+')
+            .map(t => t.trim().toLowerCase())
+            .filter(t => t.length > 0))
+        .filter(tokens => tokens.length > 0);
+}
+
+function tokenMatchesEntry(token, entry) {
+    // A token matches if it equals the entry's os, os_codename, or r_version.
+    return [entry.os, entry.os_codename, entry.r_version]
+        .some(v => typeof v === 'string' && v.toLowerCase() === token);
+}
+
+function matchSkipRule(entry, skipRules) {
+    // Returns the first rule whose tokens ALL match the entry, or null.
+    return skipRules.find(tokens => tokens.every(t => tokenMatchesEntry(t, entry))) || null;
+}
+
 function main() {
     const downloadDir = process.argv[2];
     if (!downloadDir) {
@@ -178,16 +201,38 @@ function main() {
         process.exit(1);
     }
 
+    const skipRules = parseSkipRules(process.env.SKIP_RULES);
+    if (skipRules.length > 0) {
+        console.log(`Skip rules: ${skipRules.map(tokens => tokens.join('+')).join(', ')}`);
+    }
+
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const entries = Object.entries(manifest);
     console.log(`Processing ${entries.length} manifest entries...`);
 
+    const matchedRules = new Set();
     for (const [filename, entry] of entries) {
         if (entry.type !== 'binary') {
             console.log(`  Skipping ${filename}: type=${entry.type}`);
             continue;
         }
+        const rule = matchSkipRule(entry, skipRules);
+        if (rule) {
+            matchedRules.add(rule);
+            const archivePath = path.join(downloadDir, filename);
+            if (fs.existsSync(archivePath)) {
+                fs.unlinkSync(archivePath);
+            }
+            console.log(`  Skipping ${filename}: matched skip rule "${rule.join('+')}"; removed from upload set`);
+            continue;
+        }
         processEntry(downloadDir, filename, entry);
+    }
+
+    for (const rule of skipRules) {
+        if (!matchedRules.has(rule)) {
+            console.log(`::warning::skip rule "${rule.join('+')}" did not match any manifest entry`);
+        }
     }
 
     // Remove manifest.json so it isn't uploaded

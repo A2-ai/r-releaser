@@ -233,6 +233,10 @@ runs:
           [ -f "${file}" ] || continue
           file_name="$(basename "${file}")"
 
+          if [ "${file_name}" = "manifest.json" ]; then
+            continue
+          fi
+
           echo "Uploading ${file_name}..."
           if upload_file "${file}"; then
             uploaded_count=$((uploaded_count + 1))

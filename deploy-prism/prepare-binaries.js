@@ -234,10 +234,6 @@ function main() {
             console.log(`::warning::skip rule "${rule.join('+')}" did not match any manifest entry`);
         }
     }
-
-    // Remove manifest.json so it isn't uploaded
-    fs.unlinkSync(manifestPath);
-    console.log('Removed manifest.json from download directory');
 }
 
 main();

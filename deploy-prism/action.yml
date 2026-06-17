@@ -23,6 +23,21 @@ inputs:
     description: 'If true, lists release assets without uploading'
     required: false
     default: 'false'
+  skip:
+    description: >-
+      Comma-separated skip rules. Each rule is one or more tokens joined with "+" (AND);
+      rules are OR-ed. Tokens match a manifest entry's os, os_codename, or r_version.
+      e.g. "windows+4.3, ubuntu22, 4.2" skips windows builds on R 4.3, all ubuntu22 builds,
+      and all R 4.2 builds.
+    required: false
+    default: ''
+  no_sys_deps:
+    description: >-
+      If true, declare this package's linux binaries portable across distros and send
+      ?no_sys_deps=true on their POST. Applied only to linux binary uploads; source and
+      non-linux binaries are never flagged. The API verifies portability on ingestion.
+    required: false
+    default: 'false'
 
 outputs:
   uploaded-count:
@@ -74,6 +89,8 @@ runs:
       name: Prepare binary packages
       if: inputs.dry_run != 'true'
       shell: bash
+      env:
+        SKIP_RULES: ${{ inputs.skip }}
       run: |
         set -euo pipefail
         DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
@@ -121,6 +138,7 @@ runs:
         RETRY_COUNT="${{ inputs.retry_count }}"
         DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
         PACKAGE_NAME="${{ inputs.package_name }}"
+        NO_SYS_DEPS="${{ inputs.no_sys_deps }}"
 
         if [ -z "${PACKAGE_NAME}" ]; then
           PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
@@ -138,6 +156,18 @@ runs:
           file_name="$(basename "${file_path}")"
           local attempt=0
           local wait_seconds=2
+
+          # declare linux binaries as portable.
+          # source and non-linux binaries are never marked no_sys_deps.
+          local query=""
+          if [ "${NO_SYS_DEPS}" = "true" ]; then
+            local ptype pos
+            ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+            pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+            if [ "${ptype}" = "binary" ] && [ "${pos}" = "linux" ]; then
+              query="?no_sys_deps=true"
+            fi
+          fi
 
           # Retry policy:
           # - 2xx: success
@@ -161,7 +191,7 @@ runs:
               -H "Content-Type: application/octet-stream" \
               -H "X-Filename: ${file_name}" \
               --data-binary "@${file_path}" \
-              "${UPLOAD_URL}" || true)
+              "${UPLOAD_URL}${query}" || true)
 
             local response_body
             response_body=$(cat "${response_file}" 2>/dev/null || echo "")

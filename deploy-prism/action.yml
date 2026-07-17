@@ -38,6 +38,14 @@ inputs:
       non-linux binaries are never flagged. The API verifies portability on ingestion.
     required: false
     default: 'false'
+  force:
+    description: >-
+      If true, send ?force=true alongside ?no_sys_deps=true on linux binary POSTs,
+      bypassing the covered_by_existing 409 a lower-glibc no_sys_deps archive would
+      otherwise trigger. The API only accepts force together with no_sys_deps, so this
+      input has no effect unless no_sys_deps is also true.
+    required: false
+    default: 'false'
 
 outputs:
   uploaded-count:
@@ -139,6 +147,7 @@ runs:
         DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
         PACKAGE_NAME="${{ inputs.package_name }}"
         NO_SYS_DEPS="${{ inputs.no_sys_deps }}"
+        FORCE="${{ inputs.force }}"
 
         if [ -z "${PACKAGE_NAME}" ]; then
           PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
@@ -158,16 +167,21 @@ runs:
           local wait_seconds=2
 
           # declare linux binaries as portable.
-          # source and non-linux binaries are never marked no_sys_deps.
-          local query=""
+          # source and non-linux binaries are never marked no_sys_deps, and the
+          # API rejects force without no_sys_deps, so both flags stay in this branch.
+          local params=""
           if [ "${NO_SYS_DEPS}" = "true" ]; then
             local ptype pos
             ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
             pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
             if [ "${ptype}" = "binary" ] && [ "${pos}" = "linux" ]; then
-              query="?no_sys_deps=true"
+              params="no_sys_deps=true"
+              if [ "${FORCE}" = "true" ]; then
+                params="${params}&force=true"
+              fi
             fi
           fi
+          local query="${params:+?${params}}"
 
           # Retry policy:
           # - 2xx: success
@@ -202,9 +216,17 @@ runs:
               return 0
             fi
 
-            # Treat duplicate uploads as idempotent success.
+            # Treat duplicate uploads as idempotent success, but surface the
+            # conflict variant so covered_by_existing (fixable with force=true)
+            # is distinguishable from a plain re-upload.
             if [ "${http_code}" = "409" ]; then
-              echo "::warning::${file_name} already exists on server (HTTP 409); treating as success"
+              local conflict
+              conflict=$(echo "${response_body}" | jq -r '.error // empty' 2>/dev/null || true)
+              if [ "${conflict}" = "covered_by_existing" ]; then
+                echo "::warning::${file_name} was NOT ingested (HTTP 409 covered_by_existing) - a lower-glibc no_sys_deps archive already covers it. Re-run with force=true to ingest anyway. Response: ${response_body}"
+              else
+                echo "::warning::${file_name} already exists on server (HTTP 409${conflict:+ ${conflict}}); treating as success. Response: ${response_body}"
+              fi
               return 0
             fi
 
@@ -226,6 +248,10 @@ runs:
           echo "::error::Failed to upload ${file_name} after ${RETRY_COUNT} attempt(s)"
           return 1
         }
+
+        if [ "${FORCE}" = "true" ] && [ "${NO_SYS_DEPS}" != "true" ]; then
+          echo "::warning::force=true has no effect without no_sys_deps=true; the API rejects force on its own"
+        fi
 
         echo "::group::Upload assets (package: ${PACKAGE_NAME})"
 

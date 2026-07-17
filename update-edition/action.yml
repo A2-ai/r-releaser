@@ -20,6 +20,13 @@ inputs:
   package_version:
     description: 'New version for the package'
     required: true
+  force:
+    description: >-
+      If true, send ?force=true on the edition PUT. This lets the API update an
+      immutable or protected ("latest") edition and bypasses linkedToHash
+      verification failures; the local mutability check is skipped accordingly.
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -42,8 +49,13 @@ runs:
         EDITION="${{ inputs.edition }}"
         PACKAGE="${{ inputs.package_name }}"
         VERSION="${{ inputs.package_version }}"
+        FORCE="${{ inputs.force }}"
 
         EDITION_URL="${PRISM_API_URL}/registries/${REGISTRY}/editions/${EDITION}"
+        PUT_URL="${EDITION_URL}"
+        if [ "${FORCE}" = "true" ]; then
+          PUT_URL="${EDITION_URL}?force=true"
+        fi
 
         echo "::group::Update edition (registry: ${REGISTRY}, edition: ${EDITION}, package: ${PACKAGE}, version: ${VERSION})"
 
@@ -64,10 +76,14 @@ runs:
           exit 1
         fi
 
-        # 2. Verify edition is mutable
+        # 2. Verify edition is mutable (force bypasses; the API accepts forced updates of immutable editions)
         if [[ "$(echo "$body" | jq -r '.mutable')" != "true" ]]; then
-          echo "::error::Edition ${REGISTRY}/${EDITION} is immutable and cannot be updated"
-          exit 1
+          if [ "${FORCE}" = "true" ]; then
+            echo "Edition ${REGISTRY}/${EDITION} is immutable; proceeding because force=true"
+          else
+            echo "::error::Edition ${REGISTRY}/${EDITION} is immutable and cannot be updated (set force to override)"
+            exit 1
+          fi
         fi
 
         # 3. Verify package exists in edition
@@ -99,8 +115,8 @@ runs:
           -H "Authorization: Bearer ${AUTH_TOKEN}" \
           -H "Content-Type: application/json" \
           -d "$put_body" \
-          "${EDITION_URL}"); then
-          echo "::error::PUT ${EDITION_URL} failed (connection/DNS/TLS error)"
+          "${PUT_URL}"); then
+          echo "::error::PUT ${PUT_URL} failed (connection/DNS/TLS error)"
           exit 1
         fi
 
@@ -108,7 +124,7 @@ runs:
         put_body_resp=$(echo "$put_response" | sed '$d')
 
         if [[ "$put_http_code" -ne 200 ]]; then
-          echo "::error::PUT ${EDITION_URL} returned ${put_http_code}"
+          echo "::error::PUT ${PUT_URL} returned ${put_http_code}"
           echo "$put_body_resp"
           exit 1
         fi

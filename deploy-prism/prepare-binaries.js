@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
 const os = require('node:os');
+const { updateDescription } = require('../shared/description');
 
 const CODENAME_MAP = {
     rhel: 'redhat',
@@ -87,38 +88,19 @@ function findDescription(extractDir, pkgName) {
 }
 
 function buildDescriptionFields(entry) {
-    const fields = [];
+    const fields = {};
 
     if (entry.os) {
-        fields.push(`OS: ${mapOs(entry.os, entry.os_codename || entry.os)}`);
+        fields['OS'] = mapOs(entry.os, entry.os_codename || entry.os);
     }
     if (entry.arch) {
-        fields.push(`Arch: ${mapArch(entry.arch)}`);
+        fields['Arch'] = mapArch(entry.arch);
     }
     if (entry.linked_to && typeof entry.linked_to === 'object' && Object.keys(entry.linked_to).length > 0) {
-        fields.push(`LinkedTo: ${formatLinkedTo(entry.linked_to)}`);
+        fields['LinkedTo'] = formatLinkedTo(entry.linked_to);
     }
 
     return fields;
-}
-
-function stripManagedFields(content) {
-    // Remove any existing OS/Arch/LinkedTo fields including continuation lines
-    // (DESCRIPTION format: continuation lines start with whitespace)
-    const lines = content.split('\n');
-    const filtered = [];
-    let skipping = false;
-    for (const line of lines) {
-        const fieldMatch = line.match(/^([A-Za-z]+):/);
-        if (fieldMatch) {
-            skipping = MANAGED_FIELDS.includes(fieldMatch[1]);
-        } else if (!/^\s/.test(line)) {
-            // Non-field, non-continuation line (e.g. blank line) — stop skipping
-            skipping = false;
-        }
-        if (!skipping) filtered.push(line);
-    }
-    return filtered.join('\n');
 }
 
 function processEntry(downloadDir, filename, entry) {
@@ -133,7 +115,7 @@ function processEntry(downloadDir, filename, entry) {
     }
 
     const fields = buildDescriptionFields(entry);
-    if (fields.length === 0) {
+    if (Object.keys(fields).length === 0) {
         throw new Error(`${filename}: binary entry produced no DESCRIPTION fields — check manifest data`);
     }
 
@@ -148,18 +130,15 @@ function processEntry(downloadDir, filename, entry) {
             throw new Error(`${filename}: no DESCRIPTION found in archive`);
         }
 
-        let content = fs.readFileSync(descPath, 'utf8');
-        content = stripManagedFields(content);
-        // Ensure trailing newline before appending
-        if (!content.endsWith('\n')) content += '\n';
-        content += fields.join('\n') + '\n';
-        fs.writeFileSync(descPath, content, 'utf8');
+        const content = fs.readFileSync(descPath, 'utf8');
+        const remove = MANAGED_FIELDS.filter(name => !(name in fields));
+        fs.writeFileSync(descPath, updateDescription(content, { set: fields, remove }), 'utf8');
 
         // Re-archive, replacing the original
         fs.unlinkSync(archivePath);
         repackArchive(archivePath, tmpDir, ext);
 
-        console.log(`  Modified ${filename}: set ${fields.map(f => f.split(':')[0]).join(', ')}`);
+        console.log(`  Modified ${filename}: set ${Object.keys(fields).join(', ')}`);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

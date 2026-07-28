@@ -6,6 +6,25 @@ import { spawnSync } from 'node:child_process';
 
 const INDEX = path.join(import.meta.dirname, 'index.js');
 
+const SOURCE_ENTRY = {
+    package: 'pkg',
+    version: '1.0.0',
+    type: 'source',
+    needs_compilation: true,
+    PrismRemoteRef: 'v1.0.0',
+};
+
+const BINARY_ENTRY = {
+    package: 'pkg',
+    version: '1.0.0',
+    type: 'binary',
+    os: 'linux',
+    os_codename: 'alma8',
+    arch: 'x64',
+    r_version: '4.4',
+    linked_to: { Rcpp: '1.0.11' },
+};
+
 let workspace;
 beforeEach(() => {
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-manifests-test-'));
@@ -35,8 +54,8 @@ function runMerge() {
 
 describe('merge-manifests', () => {
     it('merges entries from multiple manifests', () => {
-        writeInput('source', { 'pkg_1.0.0.tar.gz': { type: 'source' } });
-        writeInput('alma8', { 'pkg_1.0.0_linux_alma8_x64_4.4.tar.gz': { type: 'binary' } });
+        writeInput('source', { 'pkg_1.0.0.tar.gz': SOURCE_ENTRY });
+        writeInput('alma8', { 'pkg_1.0.0_linux_alma8_x64_4.4.tar.gz': BINARY_ENTRY });
 
         const result = runMerge();
         expect(result.status).toBe(0);
@@ -49,15 +68,15 @@ describe('merge-manifests', () => {
     });
 
     it('tolerates identical duplicate entries', () => {
-        writeInput('a', { 'pkg_1.0.0.tar.gz': { type: 'source', version: '1.0.0' } });
-        writeInput('b', { 'pkg_1.0.0.tar.gz': { type: 'source', version: '1.0.0' } });
+        writeInput('a', { 'pkg_1.0.0.tar.gz': SOURCE_ENTRY });
+        writeInput('b', { 'pkg_1.0.0.tar.gz': SOURCE_ENTRY });
 
         expect(runMerge().status).toBe(0);
     });
 
     it('fails on conflicting duplicate entries instead of last-wins', () => {
-        writeInput('a', { 'pkg_1.0.0.tar.gz': { type: 'source', version: '1.0.0' } });
-        writeInput('b', { 'pkg_1.0.0.tar.gz': { type: 'source', version: '2.0.0' } });
+        writeInput('a', { 'pkg_1.0.0.tar.gz': SOURCE_ENTRY });
+        writeInput('b', { 'pkg_1.0.0.tar.gz': { ...SOURCE_ENTRY, version: '2.0.0' } });
 
         const result = runMerge();
         expect(result.status).toBe(1);
@@ -71,5 +90,13 @@ describe('merge-manifests', () => {
         const result = runMerge();
         expect(result.status).toBe(1);
         expect(result.stdout).toContain('Failed to parse manifest');
+    });
+
+    it('rejects merged manifests that fail schema validation', () => {
+        writeInput('bad', { 'pkg_1.0.0.tar.gz': { type: 'source' } });
+
+        const result = runMerge();
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain('Merged manifest is invalid');
     });
 });

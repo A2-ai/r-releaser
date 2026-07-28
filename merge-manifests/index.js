@@ -2,6 +2,7 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { writeManifest } = require('../shared/manifest');
+const { validateManifest } = require('../shared/manifest-schema');
 
 function findManifests(dir, glob) {
     const results = [];
@@ -68,6 +69,11 @@ try {
             merged[key] = entry;
             sources[key] = file;
         }
+    }
+
+    const problems = validateManifest(merged);
+    if (problems.length > 0) {
+        throw new Error(`Merged manifest is invalid:\n${problems.join('\n')}`);
     }
 
     const outputPath = path.resolve(workspace, 'manifest.json');

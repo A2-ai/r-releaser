@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const { updateDescription } = require('../shared/description');
+const { validateManifest } = require('../shared/manifest-schema');
 const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
 
 const MANAGED_FIELDS = ['OS', 'Arch', 'LinkedTo'];
@@ -192,6 +193,11 @@ function main() {
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const problems = validateManifest(manifest);
+    if (problems.length > 0) {
+        console.error(`manifest.json is invalid:\n${problems.join('\n')}`);
+        process.exit(1);
+    }
     const entries = Object.entries(manifest);
     console.log(`Processing ${entries.length} manifest entries...`);
 

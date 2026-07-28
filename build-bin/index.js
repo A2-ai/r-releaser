@@ -2,10 +2,8 @@ const core = require('@actions/core');
 const fs = require('node:fs');
 const path = require('path');
 const { execSync } = require('node:child_process');
-const { parseDescriptionFile, writeManifest } = require('../shared/manifest');
+const { parseDescriptionFile, updateManifest } = require('../shared/manifest');
 const builtinPackages = require('./builtin_packages.json');
-
-const FIELD_NAME_RE = /^([^:]+)/;
 
 function getExtension(fileName) {
     let found = '';
@@ -136,18 +134,6 @@ function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
     }
 }
 
-// We want a non null object where the values can only be string/number/boolea
-function validateMetadata(obj) {
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
-        return false;
-    }
-
-    return Object.values(obj).every(value => {
-        const type = typeof value;
-        return type === 'string' || type === 'number' || type === 'boolean';
-    });
-}
-
 // For now we assume the current directory is where the DESCRIPTION file is located
 // TO reapproach description modding later 
 try {
@@ -176,7 +162,7 @@ try {
     // Resolve versions for each LinkingTo dep from the local library
     const linkedTo = {};
     for (const dep of linkingToDeps) {
-        if (includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
+        if (!includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
             continue;
         }
         try {
@@ -203,7 +189,7 @@ try {
             linked_to: linkedTo,
         },
     };
-    writeManifest(manifestPath, manifest);
+    updateManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));
 
 } catch (error) {

@@ -49,11 +49,25 @@ try {
     console.log(`Found ${files.length} manifest file(s):`);
 
     const merged = {};
+    const sources = {};
     for (const file of files) {
-        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        let data;
+        try {
+            data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (err) {
+            throw new Error(`Failed to parse manifest "${file}": ${err.message}`);
+        }
         const count = Object.keys(data).length;
         console.log(`  ${file} (${count} entry/entries)`);
-        Object.assign(merged, data);
+        for (const [key, entry] of Object.entries(data)) {
+            if (key in merged && JSON.stringify(merged[key]) !== JSON.stringify(entry)) {
+                throw new Error(
+                    `Manifest entry "${key}" in "${file}" conflicts with the entry already merged from "${sources[key]}"`
+                );
+            }
+            merged[key] = entry;
+            sources[key] = file;
+        }
     }
 
     const outputPath = path.resolve(workspace, 'manifest.json');

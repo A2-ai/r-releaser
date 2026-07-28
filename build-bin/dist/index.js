@@ -27571,12 +27571,24 @@ function writeManifest(manifestPath, manifest) {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 }
 
+// Merges entries into an existing manifest file rather than replacing it, so
+// actions writing to the same manifest_path cannot drop each other's entries.
+function updateManifest(manifestPath, entries) {
+    let existing = {};
+    if (fs.existsSync(manifestPath)) {
+        existing = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    }
+    const merged = { ...existing, ...entries };
+    writeManifest(manifestPath, merged);
+    return merged;
+}
+
 function parseLinkingTo(value) {
     if (!value) return [];
     return value.split(',').map(dep => dep.trim().replace(/\s*\(.*\)/, ''));
 }
 
-module.exports = { parseDescriptionFile, writeManifest, parseLinkingTo };
+module.exports = { parseDescriptionFile, writeManifest, updateManifest, parseLinkingTo };
 
 
 /***/ }),
@@ -27632,10 +27644,8 @@ const core = __nccwpck_require__(7484);
 const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
-const { parseDescriptionFile, writeManifest } = __nccwpck_require__(7190);
+const { parseDescriptionFile, updateManifest } = __nccwpck_require__(7190);
 const builtinPackages = __nccwpck_require__(2459);
-
-const FIELD_NAME_RE = /^([^:]+)/;
 
 function getExtension(fileName) {
     let found = '';
@@ -27766,18 +27776,6 @@ function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
     }
 }
 
-// We want a non null object where the values can only be string/number/boolea
-function validateMetadata(obj) {
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
-        return false;
-    }
-
-    return Object.values(obj).every(value => {
-        const type = typeof value;
-        return type === 'string' || type === 'number' || type === 'boolean';
-    });
-}
-
 // For now we assume the current directory is where the DESCRIPTION file is located
 // TO reapproach description modding later 
 try {
@@ -27806,7 +27804,7 @@ try {
     // Resolve versions for each LinkingTo dep from the local library
     const linkedTo = {};
     for (const dep of linkingToDeps) {
-        if (includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
+        if (!includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
             continue;
         }
         try {
@@ -27833,7 +27831,7 @@ try {
             linked_to: linkedTo,
         },
     };
-    writeManifest(manifestPath, manifest);
+    updateManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));
 
 } catch (error) {

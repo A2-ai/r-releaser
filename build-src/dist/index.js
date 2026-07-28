@@ -27571,12 +27571,24 @@ function writeManifest(manifestPath, manifest) {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 }
 
+// Merges entries into an existing manifest file rather than replacing it, so
+// actions writing to the same manifest_path cannot drop each other's entries.
+function updateManifest(manifestPath, entries) {
+    let existing = {};
+    if (fs.existsSync(manifestPath)) {
+        existing = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    }
+    const merged = { ...existing, ...entries };
+    writeManifest(manifestPath, merged);
+    return merged;
+}
+
 function parseLinkingTo(value) {
     if (!value) return [];
     return value.split(',').map(dep => dep.trim().replace(/\s*\(.*\)/, ''));
 }
 
-module.exports = { parseDescriptionFile, writeManifest, parseLinkingTo };
+module.exports = { parseDescriptionFile, writeManifest, updateManifest, parseLinkingTo };
 
 
 /***/ })
@@ -27768,16 +27780,19 @@ try {
     console.log("Metadata:", metadata);
     console.log("Build vignettes:", buildVignettes);
     console.log("resave data:", resaveData);
-    console.log("md5:", resaveData);
+    console.log("md5:", md5);
     console.log("user:", user);
 
     const tarballs = getTarballs();
     updateDescriptionFile(metadata);
-    buildPackage(libraryPath, buildVignettes, resaveData, md5);
+    buildPackage(libraryPath, buildVignettes, resaveData, md5, user);
     const updatedTarballs = getTarballs();
     const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
-    if (diff.size !== 1) {
-        throw Error(`R CMD build created several tarballs: ${diff}`);
+    if (diff.size === 0) {
+        throw Error("R CMD build did not create a tarball");
+    }
+    if (diff.size > 1) {
+        throw Error(`R CMD build created several tarballs: ${[...diff].join(', ')}`);
     }
     const [tarballName] = [...diff];
     core.setOutput("tarball_path", path.resolve(".", tarballName));

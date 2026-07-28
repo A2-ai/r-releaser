@@ -26042,6 +26042,7 @@ const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
 const { parseDescriptionFile } = __nccwpck_require__(5229);
 const builtinPackages = __nccwpck_require__(2459);
+const { linux_id_map: LINUX_ID_MAP } = __nccwpck_require__(8832);
 
 function getExtension(fileName) {
     let found = '';
@@ -26091,6 +26092,11 @@ function getPlatformTag() {
         const rel = parseOsRelease();
         const id = (rel.ID || 'linux').toLowerCase();
         const major = (rel.VERSION_ID || '0').split('.')[0];
+        // Fail at build time rather than letting deploy-prism reject the
+        // binary at release time — both sides read shared/platforms.json.
+        if (!(id in LINUX_ID_MAP)) {
+            throw Error(`Unsupported linux distro "${id}" (from /etc/os-release) — add it to shared/platforms.json`);
+        }
         return `linux_${id}${major}`; // e.g. linux_ubuntu22, linux_rhel9, linux_alma8
     }
     if (process.platform === 'darwin') {
@@ -27838,6 +27844,14 @@ module.exports = parseParams
 
 "use strict";
 module.exports = /*#__PURE__*/JSON.parse('["base","compiler","datasets","graphics","grDevices","grid","methods","parallel","splines","stats","stats4","tcltk","tools","utils","boot","class","cluster","codetools","foreign","KernSmooth","lattice","MASS","Matrix","mgcv","nlme","nnet","rpart","spatial","survival"]');
+
+/***/ }),
+
+/***/ 8832:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('{"comment":"Single source of truth mapping /etc/os-release IDs (as embedded in binary platform tags, e.g. linux_alma8) to the OS names PRISM expects. build-bin validates against this at build time and deploy-prism maps with it at deploy time, so a distro that builds cannot fail at deploy.","linux_id_map":{"ubuntu":"ubuntu","debian":"debian","rhel":"redhat","alma":"almalinux","almalinux":"almalinux","rocky":"rocky","centos":"centos","fedora":"fedora","amzn":"amazon","sles":"sles"}}');
 
 /***/ })
 

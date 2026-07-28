@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests and bundle check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check dist bundles are up to date
+        run: |
+          npm run bundle
+          if ! git diff --exit-code -- '*/dist/'; then
+            echo "::error::dist/ is stale — run 'npm run bundle' and commit the result"
+            exit 1
+          fi
+
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color

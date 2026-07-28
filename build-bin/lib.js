@@ -3,6 +3,7 @@ const path = require('path');
 const { execSync } = require('node:child_process');
 const { parseDescriptionFile } = require('../shared/manifest');
 const builtinPackages = require('./builtin_packages.json');
+const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
 
 function getExtension(fileName) {
     let found = '';
@@ -52,6 +53,11 @@ function getPlatformTag() {
         const rel = parseOsRelease();
         const id = (rel.ID || 'linux').toLowerCase();
         const major = (rel.VERSION_ID || '0').split('.')[0];
+        // Fail at build time rather than letting deploy-prism reject the
+        // binary at release time — both sides read shared/platforms.json.
+        if (!(id in LINUX_ID_MAP)) {
+            throw Error(`Unsupported linux distro "${id}" (from /etc/os-release) — add it to shared/platforms.json`);
+        }
         return `linux_${id}${major}`; // e.g. linux_ubuntu22, linux_rhel9, linux_alma8
     }
     if (process.platform === 'darwin') {

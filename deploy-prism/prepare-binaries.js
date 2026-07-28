@@ -3,14 +3,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const { updateDescription } = require('../shared/description');
-
-const CODENAME_MAP = {
-    rhel: 'redhat',
-    alma: 'almalinux',
-};
+const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
 
 const MANAGED_FIELDS = ['OS', 'Arch', 'LinkedTo'];
 
@@ -29,9 +25,11 @@ function mapOs(osField, osCodename) {
         throw new Error(`Invalid os_codename for linux binary: "${osCodename}"`);
     }
 
-    let name = match[1];
+    const name = LINUX_ID_MAP[match[1]];
     const version = match[2];
-    name = CODENAME_MAP[name] || name;
+    if (!name) {
+        throw new Error(`Unknown linux distro "${match[1]}" in os_codename "${osCodename}" — add it to shared/platforms.json`);
+    }
     return `${name} ${version}`;
 }
 
@@ -54,11 +52,21 @@ function getArchiveExtension(filename) {
     return null;
 }
 
+function run(cmd, args, opts = {}) {
+    const result = spawnSync(cmd, args, { stdio: 'pipe', encoding: 'utf8', ...opts });
+    if (result.error) {
+        throw new Error(`Failed to run ${cmd}: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+        throw new Error(`${cmd} ${args.join(' ')} exited with ${result.status}:\n${result.stderr}`);
+    }
+}
+
 function extractArchive(archivePath, destDir, ext) {
     if (ext === '.tar.gz' || ext === '.tgz') {
-        execSync(`tar xf "${archivePath}" -C "${destDir}"`, { stdio: 'pipe' });
+        run('tar', ['xf', archivePath, '-C', destDir]);
     } else if (ext === '.zip') {
-        execSync(`unzip -q -o "${archivePath}" -d "${destDir}"`, { stdio: 'pipe' });
+        run('unzip', ['-q', '-o', archivePath, '-d', destDir]);
     }
 }
 
@@ -66,11 +74,9 @@ function repackArchive(archivePath, sourceDir, ext) {
     // Get the top-level entries to pack
     const entries = fs.readdirSync(sourceDir);
     if (ext === '.tar.gz' || ext === '.tgz') {
-        const args = entries.map(e => `"${e}"`).join(' ');
-        execSync(`tar czf "${archivePath}" ${args}`, { cwd: sourceDir, stdio: 'pipe' });
+        run('tar', ['czf', archivePath, ...entries], { cwd: sourceDir });
     } else if (ext === '.zip') {
-        const args = entries.map(e => `"${e}"`).join(' ');
-        execSync(`zip -qr "${archivePath}" ${args}`, { cwd: sourceDir, stdio: 'pipe' });
+        run('zip', ['-qr', archivePath, ...entries], { cwd: sourceDir });
     }
 }
 
@@ -215,4 +221,8 @@ function main() {
     }
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+module.exports = { mapOs, mapArch, formatLinkedTo, buildDescriptionFields, parseSkipRules, matchSkipRule };

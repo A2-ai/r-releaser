@@ -1,0 +1,15 @@
+{
+  "comment": "Single source of truth mapping /etc/os-release IDs (as embedded in binary platform tags, e.g. linux_alma8) to the OS names PRISM expects. build-bin validates against this at build time and deploy-prism maps with it at deploy time, so a distro that builds cannot fail at deploy.",
+  "linux_id_map": {
+    "ubuntu": "ubuntu",
+    "debian": "debian",
+    "rhel": "redhat",
+    "alma": "almalinux",
+    "almalinux": "almalinux",
+    "rocky": "rocky",
+    "centos": "centos",
+    "fedora": "fedora",
+    "amzn": "amazon",
+    "sles": "sles"
+  }
+}

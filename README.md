@@ -10,6 +10,15 @@ build-src ──► build-bin (once per platform) ──► merge-manifests ─�
 
 ## Actions
 
+### setup-build-env
+
+Prepares a linux build environment before `rv sync` runs: installs the
+distro's compiler toolchain (`toolchain: auto`, or `none` to skip) and system
+libraries (`sysdeps: auto` resolves them with `rv sysdeps` on Ubuntu/Debian;
+`none` skips; a space-separated package list installs exactly those).
+Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when not root.
+No-op on macOS and Windows.
+
 ### build-src
 
 Rewrites `DESCRIPTION` in the working directory with caller metadata (plus `GitOrigin`/`GitSHA`), strips `Remotes:`, runs `R CMD build .`, and writes a `source` manifest entry.

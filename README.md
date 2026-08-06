@@ -14,10 +14,17 @@ build-src ──► build-bin (once per platform) ──► merge-manifests ─�
 
 Prepares a linux build environment before `rv sync` runs: installs the
 distro's compiler toolchain (`toolchain: auto`, or `none` to skip) and system
-libraries (`sysdeps: auto` resolves them with `rv sysdeps` on Ubuntu/Debian;
-`none` skips; a space-separated package list installs exactly those).
-Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when not root.
-No-op on macOS and Windows.
+libraries (`sysdeps: auto` resolves them with `rv sysdeps`; `none` skips; a
+space-separated package list installs exactly those). With `auto`,
+`sysdeps_ignore` names dependencies to pass as `--ignore` flags (for rules the
+database resolves to nonexistent package names) and `sysdeps_extra` names
+packages to install in addition (for requirements the database omits). Before
+installing system libraries on an EL distro, EPEL and the builder repo
+(PowerTools on EL8, CRB on EL9+) are enabled. An empty `auto` result is
+ambiguous and annotated as such: either nothing is required, or the platform
+is unsupported by `rv sysdeps` (almalinux10 and native Rocky are known
+unsupported). Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when
+not root. No-op on macOS and Windows.
 
 ### build-src
 

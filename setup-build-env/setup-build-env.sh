@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Installs the compiler toolchain and system libraries for an R package build.
 # Inputs via env: TOOLCHAIN (auto|none), SYSDEPS (auto|none|space-separated
-# distro package names). Runs as-is in containers (root) and on bare-metal
-# runners (non-root with passwordless sudo).
+# distro package names), SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated,
+# auto mode only). Runs as-is in containers (root) and on bare-metal runners
+# (non-root with passwordless sudo).
 set -euo pipefail
 
 TOOLCHAIN="${TOOLCHAIN:-auto}"
 SYSDEPS="${SYSDEPS:-auto}"
+SYSDEPS_IGNORE="${SYSDEPS_IGNORE:-}"
+SYSDEPS_EXTRA="${SYSDEPS_EXTRA:-}"
 
 if [ "$(uname -s)" != "Linux" ]; then
     echo "::notice::setup-build-env: toolchain/sysdeps management only applies to linux; nothing to do on $(uname -s)"
@@ -58,6 +61,30 @@ install_pkgs() {
     esac
 }
 
+# Most -devel packages on EL distros live outside the base repos: EPEL plus
+# the builder repo, named PowerTools on EL8 and CRB from EL9 on. Enabling them
+# needs dnf's config-manager plugin, so other package managers are left alone.
+enable_rpm_repos() {
+    if [ "$PM" != "dnf" ]; then
+        return 0
+    fi
+    local id major repo
+    id=$(. /etc/os-release 2>/dev/null && echo "${ID:-}" || true)
+    major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-0}" | cut -d. -f1 || true)
+    case "$id" in
+        almalinux|rocky|centos) ;;
+        *) return 0 ;;
+    esac
+    case "$major" in
+        8) repo="powertools" ;;
+        9|10) repo="crb" ;;
+        *) return 0 ;;
+    esac
+    echo "setup-build-env: enabling EPEL and ${repo} on ${id}${major}"
+    $SUDO dnf install -y epel-release dnf-plugins-core
+    $SUDO dnf config-manager --set-enabled "$repo"
+}
+
 case "$TOOLCHAIN" in
     none)
         echo "setup-build-env: toolchain=none, skipping toolchain install"
@@ -75,6 +102,10 @@ case "$TOOLCHAIN" in
         ;;
 esac
 
+if [ "$SYSDEPS" != "auto" ] && { [ -n "$SYSDEPS_IGNORE" ] || [ -n "$SYSDEPS_EXTRA" ]; }; then
+    echo "::warning::setup-build-env: sysdeps_ignore/sysdeps_extra only apply with sysdeps=auto — ignoring them"
+fi
+
 case "$SYSDEPS" in
     none)
         echo "setup-build-env: sysdeps=none, skipping system dependencies"
@@ -82,22 +113,33 @@ case "$SYSDEPS" in
     auto)
         if ! command -v rv >/dev/null 2>&1; then
             echo "::warning::setup-build-env: sysdeps=auto requires rv on PATH — skipping system dependency resolution"
-        elif [ "$PM" != "apt-get" ]; then
-            echo "::notice::setup-build-env: rv sysdeps only supports Ubuntu/Debian — skipping sysdeps=auto on this distro. Set an explicit sysdeps map in prism.yml if the build needs system libraries."
         else
             if ! command -v jq >/dev/null 2>&1; then
                 install_pkgs jq
             fi
-            mapfile -t pkgs < <(rv sysdeps --json --only-absent | jq -r '.[]')
+            ignore_flags=()
+            for dep in $SYSDEPS_IGNORE; do
+                ignore_flags+=(--ignore "$dep")
+            done
+            # Assignment first so a failing rv exits the script instead of
+            # silently producing an empty list through process substitution.
+            sysdeps_json=$(rv sysdeps --json --only-absent ${ignore_flags[@]+"${ignore_flags[@]}"})
+            mapfile -t pkgs < <(jq -r '.[]' <<< "$sysdeps_json")
+            read -r -a extra <<< "$SYSDEPS_EXTRA"
+            pkgs+=(${extra[@]+"${extra[@]}"})
             if [ "${#pkgs[@]}" -eq 0 ]; then
-                echo "setup-build-env: rv sysdeps reports nothing missing"
+                echo "::notice::setup-build-env: no system dependencies resolved — either none are required, or this platform is not supported by rv sysdeps"
             else
+                enable_rpm_repos
                 install_pkgs "${pkgs[@]}"
             fi
         fi
         ;;
     *)
         read -r -a pkgs <<< "$SYSDEPS"
-        install_pkgs "${pkgs[@]}"
+        if [ "${#pkgs[@]}" -gt 0 ]; then
+            enable_rpm_repos
+            install_pkgs "${pkgs[@]}"
+        fi
         ;;
 esac

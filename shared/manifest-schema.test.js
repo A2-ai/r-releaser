@@ -19,6 +19,8 @@ const VALID = {
         arch: 'x64',
         r_version: '4.4',
         linked_to: { Rcpp: '1.0.11' },
+        no_sys_deps: true,
+        glibc_max: '2.28',
     },
 };
 
@@ -52,6 +54,29 @@ describe('validateManifest', () => {
             expect(joined).toContain(`"${key}" must be a non-empty string`);
         }
         expect(joined).toContain('linked_to["Rcpp"] must be a string');
+    });
+
+    it('accepts binary entries without portability fields', () => {
+        const entry = { ...VALID['pkg_1.0.0_linux_alma8_x64_4.4.tar.gz'] };
+        delete entry.no_sys_deps;
+        delete entry.glibc_max;
+        expect(validateManifest({ 'x.tar.gz': entry })).toEqual([]);
+    });
+
+    it('rejects mistyped portability fields', () => {
+        const base = VALID['pkg_1.0.0_linux_alma8_x64_4.4.tar.gz'];
+        const errors = validateManifest({
+            'x.tar.gz': { ...base, no_sys_deps: 'true', glibc_max: 2.28 },
+        });
+        const joined = errors.join('\n');
+        expect(joined).toContain('"no_sys_deps" must be a boolean');
+        expect(joined).toContain('"glibc_max" must be a version string');
+    });
+
+    it('rejects glibc_max with trailing garbage', () => {
+        const base = VALID['pkg_1.0.0_linux_alma8_x64_4.4.tar.gz'];
+        const errors = validateManifest({ 'x.tar.gz': { ...base, glibc_max: '2.28garbage' } });
+        expect(errors.join('\n')).toContain('"glibc_max" must be a version string');
     });
 
     it('rejects non-scalar source metadata', () => {

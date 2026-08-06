@@ -25,7 +25,7 @@
     },
     "binaryEntry": {
       "type": "object",
-      "description": "Written by build-bin per built binary. os_codename embeds the /etc/os-release ID plus major version (e.g. almalinux8) and must map through shared/platforms.json at deploy time.",
+      "description": "Written by build-bin per built binary. os_codename embeds the /etc/os-release ID plus major version (e.g. almalinux8) and must map through shared/platforms.json at deploy time. no_sys_deps and glibc_max are written by the portability verifier on linux builds (docs/portability-contract.md); both are absent in manifests from older build-bin versions.",
       "required": ["package", "version", "type", "os", "os_codename", "arch", "r_version", "linked_to"],
       "properties": {
         "package": { "type": "string", "minLength": 1 },
@@ -38,7 +38,9 @@
         "linked_to": {
           "type": "object",
           "additionalProperties": { "type": "string" }
-        }
+        },
+        "no_sys_deps": { "type": "boolean" },
+        "glibc_max": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" }
       },
       "additionalProperties": { "type": ["string", "number", "boolean"] }
     }

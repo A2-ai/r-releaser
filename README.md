@@ -39,12 +39,15 @@ Runs `R CMD INSTALL --build` on the source tarball, names the product `{pkg}_{ve
 
 The platform tag embeds the `/etc/os-release` `ID` plus major version (e.g. `linux_almalinux8`). Building on a distro that is not listed in [`shared/platforms.json`](shared/platforms.json) fails immediately, because `deploy-prism` would be unable to map the binary later.
 
+On linux, every shared object in the installed package is verified against the [portability contract](docs/portability-contract.md) (a static `readelf` read of `DT_NEEDED`), and the result is recorded in the manifest as `no_sys_deps`, alongside the highest required `GLIBC_` version as `glibc_max`. When verification cannot run, a claimed build fails and an unclaimed build warns and records neither field.
+
 | Input | Default | Notes |
 |---|---|---|
 | `src_tarball_path` | required | Source tarball from build-src |
 | `library` | required | Library containing the package's dependencies |
 | `linking_to_deps` | `[]` | JSON array from build-src's `linking_to_deps` output |
 | `include_builtin_linking_to_deps` | `false` | When `true`, base/recommended packages ([`builtin_packages.json`](build-bin/builtin_packages.json)) are included in `linked_to`; excluded otherwise |
+| `no_sys_deps` | `false` | Claims binary portability per the [portability contract](docs/portability-contract.md); the build fails when the claim is violated or cannot be verified. Linux-only; ignored with a warning elsewhere |
 | `manifest_path` | `manifest.json` | Merged into, not replaced |
 
 Outputs: `binary_path`, `binary_name`, `manifest_path`.
@@ -59,6 +62,8 @@ Downloads all assets of a GitHub Release, validates `manifest.json` (which must 
 
 Key inputs: `prism_api_url`, `auth_token`, `release_tag` (required); `package_name`, `retry_count`, `dry_run`, `skip` (comma-OR/plus-AND rules over os/os_codename/r_version), `no_sys_deps`, `force`.
 
+`?no_sys_deps=true` is sent only when the `no_sys_deps` input is true **and** the asset's manifest entry records `no_sys_deps: true` from build-bin's verifier; a manifest recording `false` or lacking the field (older build-bin, or build-time verification could not run) warns and uploads unflagged.
+
 ### create-edition
 
 Ensures an "individual package" registry named after the package exists, then creates an **immutable** edition `{package}/{version}` (optionally `?latest=true`). Exits successfully if the edition already exists.
@@ -69,7 +74,7 @@ GET-modify-PUT of an existing **mutable** edition: bumps this package's version,
 
 ## The manifest
 
-`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`.
+`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`, plus the optional portability fields `no_sys_deps` and `glibc_max` on linux builds.
 
 ## Development
 

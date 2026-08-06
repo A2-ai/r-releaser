@@ -83,4 +83,4 @@ CI enforces tests, up-to-date `dist/` bundles, and actionlint. The JS actions ru
 
 ## Versioning
 
-Consumers currently reference these actions as `@deploy-prism`. That branch is frozen; new work lands on `main`, which will be tagged `v1.0.0` (with a moving `v1` major tag) once the hardening phase is signed off.
+Consumers reference these actions as `@deploy-prism`, and new work merges into that branch, so changes reach consumers on their next workflow run. Semver tags (`v1.0.0` with a moving `v1` major tag) may be introduced later once the release process stabilizes.

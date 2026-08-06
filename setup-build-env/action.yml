@@ -15,8 +15,11 @@ inputs:
     description: >-
       System libraries to install before the build: "auto" resolves them from
       the dependency tree with `rv sysdeps`, "none" skips, or a space-separated
-      list of distro package names. Before installing on an EL distro, EPEL and
-      the builder repo (PowerTools on EL8, CRB on EL9+) are enabled.
+      list of distro package names. Before installing on an EL clone
+      (AlmaLinux/Rocky/CentOS), EPEL is installed and the builder repo
+      (PowerTools on EL8, CRB on EL9+) is enabled for that install via
+      --enablerepo; on RHEL/UBI both are best-effort and skipped with a
+      warning when unavailable.
     required: false
     default: 'auto'
   sysdeps_ignore:
@@ -33,6 +36,13 @@ inputs:
       Only applies with sysdeps "auto".
     required: false
     default: ''
+  platform:
+    description: >-
+      Resolved platform as <id><major> (e.g. almalinux8, rhel9), used to pick
+      the repo set for system dependency installs. Empty detects from
+      /etc/os-release.
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
@@ -43,4 +53,5 @@ runs:
         SYSDEPS: ${{ inputs.sysdeps }}
         SYSDEPS_IGNORE: ${{ inputs.sysdeps_ignore }}
         SYSDEPS_EXTRA: ${{ inputs.sysdeps_extra }}
+        PLATFORM: ${{ inputs.platform }}
       run: '"${GITHUB_ACTION_PATH}/setup-build-env.sh"'

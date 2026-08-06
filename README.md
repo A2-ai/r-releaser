@@ -19,8 +19,10 @@ space-separated package list installs exactly those). With `auto`,
 `sysdeps_ignore` names dependencies to pass as `--ignore` flags (for rules the
 database resolves to nonexistent package names) and `sysdeps_extra` names
 packages to install in addition (for requirements the database omits). Before
-installing system libraries on an EL distro, EPEL and the builder repo
-(PowerTools on EL8, CRB on EL9+) are enabled. An empty `auto` result is
+installing system libraries on an EL clone (AlmaLinux/Rocky/CentOS), EPEL is
+installed and the builder repo (PowerTools on EL8, CRB on EL9+) is enabled for
+that install; on RHEL/UBI both are best-effort — EPEL comes from the Fedora
+mirror and CRB is enabled only if the system defines it. An empty `auto` result is
 ambiguous and annotated as such: either nothing is required, or the platform
 is unsupported by `rv sysdeps` (almalinux10 and native Rocky are known
 unsupported). Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when

@@ -1,0 +1,16 @@
+{
+  "comment": "Single source of truth for the portable-runtime allowlist in docs/portability-contract.md: the only SONAMEs a no_sys_deps binary may link, besides the ld-linux-* loaders matched by regex in lib.js. libstdc++/libgfortran/libgomp are deliberately absent — SONAME presence proves nothing about their symbol-version floors (GLIBCXX_ etc.), so they count as system dependencies.",
+  "sonames": [
+    "libc.so.6",
+    "libm.so.6",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libutil.so.1",
+    "libgcc_s.so.1",
+    "libR.so",
+    "libRblas.so",
+    "libRlapack.so"
+  ]
+}

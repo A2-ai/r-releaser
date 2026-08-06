@@ -14,6 +14,7 @@ import {
     applyPortabilityPolicy,
     readTarballDescription,
 } from './lib.js';
+import portableRuntimeLibs from './portable_runtime_libs.json';
 import { execFileSync } from 'node:child_process';
 
 describe('resolveLinkedTo', () => {
@@ -70,13 +71,10 @@ describe('getExtension', () => {
 });
 
 describe('isPortableRuntimeLib', () => {
-    it('allows the glibc family, loaders, libgcc_s, and the R family', () => {
+    it('allows every registry SONAME and the architecture loaders', () => {
         for (const lib of [
-            'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0',
-            'librt.so.1', 'libresolv.so.2', 'libutil.so.1',
+            ...portableRuntimeLibs.sonames,
             'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1',
-            'libgcc_s.so.1',
-            'libR.so', 'libRblas.so', 'libRlapack.so',
         ]) {
             expect(isPortableRuntimeLib(lib), lib).toBe(true);
         }
@@ -89,6 +87,20 @@ describe('isPortableRuntimeLib', () => {
         ]) {
             expect(isPortableRuntimeLib(lib), lib).toBe(false);
         }
+    });
+
+    it('matches the Allowed rows of the contract table in docs/portability-contract.md', () => {
+        const doc = fs.readFileSync(
+            new URL('../docs/portability-contract.md', import.meta.url), 'utf8'
+        );
+        const docSonames = new Set();
+        for (const line of doc.split('\n')) {
+            if (!line.startsWith('|') || !line.includes('**Allowed.**')) continue;
+            for (const [, soname] of line.split('|')[2].matchAll(/`([^`]+)`/g)) {
+                if (!soname.startsWith('ld-linux-')) docSonames.add(soname);
+            }
+        }
+        expect(docSonames).toEqual(new Set(portableRuntimeLibs.sonames));
     });
 });
 
@@ -137,10 +149,10 @@ describe('verifyPortability', () => {
     let libDir;
 
     const makeSoFiles = (...names) => {
-        const libsPath = path.join(libDir, 'pkg', 'libs');
+        const pkgPath = path.join(libDir, 'pkg');
         for (const name of names) {
-            fs.mkdirSync(path.dirname(path.join(libsPath, name)), { recursive: true });
-            fs.writeFileSync(path.join(libsPath, name), '');
+            fs.mkdirSync(path.dirname(path.join(pkgPath, name)), { recursive: true });
+            fs.writeFileSync(path.join(pkgPath, name), '');
         }
     };
 
@@ -158,15 +170,16 @@ describe('verifyPortability', () => {
         })).toThrow('Installed package not found');
     });
 
-    it('is trivially portable when there is no libs directory', () => {
+    it('is trivially portable when the tree contains no shared objects', () => {
         fs.mkdirSync(path.join(libDir, 'pkg'), { recursive: true });
+        fs.writeFileSync(path.join(libDir, 'pkg', 'DESCRIPTION'), 'Package: pkg\n');
         expect(verifyPortability(libDir, 'pkg', () => {
             throw Error('should not be called');
         })).toEqual({ noSysDeps: true, violations: [], glibcMax: null });
     });
 
     it('passes clean objects and records the max GLIBC_ across all of them', () => {
-        makeSoFiles('a.so', 'b.so');
+        makeSoFiles('libs/a.so', 'libs/b.so');
         const outputs = {
             'a.so': readelfOutput(['libc.so.6', 'libm.so.6'], ['GLIBC_2.28']),
             'b.so': readelfOutput(['libc.so.6', 'libgcc_s.so.1'], ['GLIBC_2.17']),
@@ -176,7 +189,7 @@ describe('verifyPortability', () => {
     });
 
     it('reports violations from every object, not just the first', () => {
-        makeSoFiles('a.so', 'b.so');
+        makeSoFiles('libs/a.so', 'libs/b.so');
         const outputs = {
             'a.so': readelfOutput(['libstdc++.so.6', 'libc.so.6']),
             'b.so': readelfOutput(['libcurl.so.4', 'libgomp.so.1']),
@@ -184,18 +197,57 @@ describe('verifyPortability', () => {
         const result = verifyPortability(libDir, 'pkg', soPath => outputs[path.basename(soPath)]);
         expect(result.noSysDeps).toBe(false);
         expect(result.violations).toEqual([
-            { so: 'a.so', libs: ['libstdc++.so.6'] },
-            { so: 'b.so', libs: ['libcurl.so.4', 'libgomp.so.1'] },
+            { so: path.join('libs', 'a.so'), libs: ['libstdc++.so.6'] },
+            { so: path.join('libs', 'b.so'), libs: ['libcurl.so.4', 'libgomp.so.1'] },
         ]);
     });
 
     it('finds shared objects in arch subdirectories', () => {
-        makeSoFiles(path.join('x64', 'pkg.so'));
+        makeSoFiles('libs/x64/pkg.so');
         const result = verifyPortability(libDir, 'pkg', () => readelfOutput(['libcurl.so.4']));
         expect(result.noSysDeps).toBe(false);
         expect(result.violations).toEqual([
-            { so: path.join('x64', 'pkg.so'), libs: ['libcurl.so.4'] },
+            { so: path.join('libs', 'x64', 'pkg.so'), libs: ['libcurl.so.4'] },
         ]);
+    });
+
+    it('scans versioned shared objects (.so.N)', () => {
+        makeSoFiles('libs/libfoo.so.2');
+        const result = verifyPortability(libDir, 'pkg', () => readelfOutput(['libssl.so.3']));
+        expect(result.noSysDeps).toBe(false);
+        expect(result.violations).toEqual([
+            { so: path.join('libs', 'libfoo.so.2'), libs: ['libssl.so.3'] },
+        ]);
+    });
+
+    it('discovers shared objects outside libs/', () => {
+        makeSoFiles('libs/pkg.so', 'lib/libtbb.so.12.1');
+        const outputs = {
+            'pkg.so': readelfOutput(['libc.so.6']),
+            'libtbb.so.12.1': readelfOutput(['libstdc++.so.6']),
+        };
+        const result = verifyPortability(libDir, 'pkg', soPath => outputs[path.basename(soPath)]);
+        expect(result.noSysDeps).toBe(false);
+        expect(result.violations).toEqual([
+            { so: path.join('lib', 'libtbb.so.12.1'), libs: ['libstdc++.so.6'] },
+        ]);
+    });
+
+    it('records glibc_max from objects outside libs/', () => {
+        makeSoFiles('libs/pkg.so', 'jri/libjri.so');
+        const outputs = {
+            'pkg.so': readelfOutput(['libc.so.6'], ['GLIBC_2.17']),
+            'libjri.so': readelfOutput(['libc.so.6'], ['GLIBC_2.34']),
+        };
+        const result = verifyPortability(libDir, 'pkg', soPath => outputs[path.basename(soPath)]);
+        expect(result).toEqual({ noSysDeps: true, violations: [], glibcMax: '2.34' });
+    });
+
+    it('ignores files whose names merely contain .so', () => {
+        makeSoFiles('R/pkg.something', 'src/a.solver');
+        expect(verifyPortability(libDir, 'pkg', () => {
+            throw Error('should not be called');
+        })).toEqual({ noSysDeps: true, violations: [], glibcMax: null });
     });
 
     it('propagates readelf failures', () => {

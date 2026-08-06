@@ -20,8 +20,9 @@ on a distro nobody tested. This contract exists to guard the second case.
 
 ## Mechanism
 
-For every `*.so` under the installed package's `libs/` directory, build-bin runs
-`readelf -dV` and reads:
+For every shared object (`*.so`, including versioned names like `*.so.2`) anywhere
+under the installed package's directory — not just `libs/`, since packages also ship
+objects via `inst/` — build-bin runs `readelf -dV` and reads:
 
 - **`DT_NEEDED`** entries from the dynamic section — the object's *declared, direct*
   shared-library dependencies. This is a static read; nothing is executed.

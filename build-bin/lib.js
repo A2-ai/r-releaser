@@ -36,12 +36,14 @@ function renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion
 // INSTALL installs under the DESCRIPTION Package name regardless of what the
 // tarball file is called, so filename-derived names break on renamed tarballs.
 function readTarballDescription(srcTarballPath) {
-    const entries = execFileSync('tar', ['-tzf', srcTarballPath], { encoding: 'utf8' }).split('\n');
+    // Node's default 1 MiB maxBuffer overflows on listings of large packages.
+    const tarOpts = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+    const entries = execFileSync('tar', ['-tzf', srcTarballPath], tarOpts).split('\n');
     const descEntry = entries.map(e => e.trim()).find(e => /^(\.\/)?[^/]+\/DESCRIPTION$/.test(e));
     if (!descEntry) {
         throw Error(`No top-level DESCRIPTION found in ${srcTarballPath}`);
     }
-    const content = execFileSync('tar', ['-xzOf', srcTarballPath, descEntry], { encoding: 'utf8' });
+    const content = execFileSync('tar', ['-xzOf', srcTarballPath, descEntry], tarOpts);
     const desc = parseDescription(content);
     if (!desc['Package'] || !desc['Version']) {
         throw Error(`DESCRIPTION in ${srcTarballPath} lacks Package or Version`);
@@ -132,15 +134,7 @@ function resolveLinkedTo(linkingToDeps, libraryPath, includeBuiltinLinkingToDeps
     return linkedTo;
 }
 
-// Allowlist per docs/portability-contract.md. libstdc++/libgfortran/libgomp are
-// deliberately absent: SONAME presence proves nothing about their symbol-version
-// floors (GLIBCXX_ etc.), so they count as system dependencies.
-const PORTABLE_RUNTIME_LIBS = new Set([
-    'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0',
-    'librt.so.1', 'libresolv.so.2', 'libutil.so.1',
-    'libgcc_s.so.1',
-    'libR.so', 'libRblas.so', 'libRlapack.so',
-]);
+const PORTABLE_RUNTIME_LIBS = new Set(require('./portable_runtime_libs.json').sonames);
 const LD_LINUX_RE = /^ld-linux-[^/]*\.so(\.\d+)?$/;
 
 function isPortableRuntimeLib(soname) {
@@ -168,29 +162,34 @@ function compareVersions(a, b) {
 }
 
 function execReadelf(soPath) {
-    return execFileSync('readelf', ['-dV', soPath], { encoding: 'utf8', stdio: 'pipe' });
+    // LC_ALL=C: the parsers below match readelf's English output.
+    return execFileSync('readelf', ['-dV', soPath], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: { ...process.env, LC_ALL: 'C' },
+    });
 }
 
-// Static DT_NEEDED read of every .so in the installed package; throws when
-// verification cannot run (readelf missing/erroring, no dynamic section).
-// Recursive because R places shared objects in arch subdirs like libs/x64/.
+const SO_FILE_RE = /\.so(\.\d+)*$/;
+
+// Static DT_NEEDED read of every shared object in the installed package;
+// throws when verification cannot run (readelf missing/erroring, no dynamic
+// section). Walks the whole install tree, not just libs/: packages ship
+// versioned objects via inst/ (e.g. lib/libtbb.so.2, jri/libjri.so), and a
+// missed object would let a false no_sys_deps claim through.
 function verifyPortability(libraryPath, pkgName, runReadelf = execReadelf) {
     const pkgDir = path.join(libraryPath, pkgName);
     if (!fs.existsSync(pkgDir)) {
         throw Error(`Installed package not found at ${pkgDir} — cannot verify portability`);
     }
-    const libsDir = path.join(pkgDir, 'libs');
-    let soFiles = [];
-    if (fs.existsSync(libsDir)) {
-        soFiles = fs.readdirSync(libsDir, { recursive: true })
-            .map(String)
-            .filter(f => f.endsWith('.so') && fs.statSync(path.join(libsDir, f)).isFile());
-    }
+    const soFiles = fs.readdirSync(pkgDir, { recursive: true })
+        .map(String)
+        .filter(f => SO_FILE_RE.test(f) && fs.statSync(path.join(pkgDir, f)).isFile());
 
     const violations = [];
     let glibcMax = null;
     for (const so of soFiles) {
-        const output = runReadelf(path.join(libsDir, so));
+        const output = runReadelf(path.join(pkgDir, so));
         if (!output.includes('Dynamic section')) {
             throw Error(`readelf output for ${so} contains no dynamic section`);
         }

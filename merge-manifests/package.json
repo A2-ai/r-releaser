@@ -1,5 +1,5 @@
 {
-  "name": "@r-releaser/build-src",
+  "name": "@r-releaser/merge-manifests",
   "version": "1.0.0",
   "private": true,
   "main": "index.js",

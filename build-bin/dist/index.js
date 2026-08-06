@@ -26038,49 +26038,132 @@ module.exports = require("zlib");
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const fs = __nccwpck_require__(3024);
+const path = __nccwpck_require__(6928);
 const { execSync } = __nccwpck_require__(1421);
-const { updateDescription } = __nccwpck_require__(6736);
+const { parseDescriptionFile } = __nccwpck_require__(5229);
+const builtinPackages = __nccwpck_require__(2459);
+const { linux_id_map: LINUX_ID_MAP } = __nccwpck_require__(8832);
 
-function getTarballs() {
+function getExtension(fileName) {
+    let found = '';
+    for (const ext of ['.tar.gz', '.tgz', '.zip']) {
+        if (fileName.endsWith(ext)) {
+            found = ext;
+            break;
+        }
+    }
+    return found;
+}
+
+function renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion) {
     const items = fs.readdirSync('.');
-    const files = items.filter(item => {
-        return fs.statSync(item).isFile() && item.endsWith(".tar.gz");
+    const tarballName = items.find(item => {
+        return fs.statSync(item).isFile() &&
+        getExtension(item) !== '';
     });
-
-    return new Set(files);
+    if (!tarballName) {
+        throw Error(`No tarball found`);
+    }
+    const ext = getExtension(tarballName);
+    const newName = `${pkgName}_${pkgVersion}_${platformTag}_${archTag}_${rVersion}${ext}`;
+    fs.renameSync(tarballName, newName);
+    return newName;
 }
 
-function updateDescriptionFile(metadata) {
-    const content = fs.readFileSync('DESCRIPTION', 'utf8');
-    const updatedContent = updateDescription(content, { set: metadata, remove: ['Remotes'] });
-    fs.writeFileSync('DESCRIPTION', updatedContent);
-
-    return updatedContent;
+function parseOsRelease() {
+    try {
+        const txt = fs.readFileSync('/etc/os-release', 'utf8');
+        const out = {};
+        for (const line of txt.split('\n')) {
+            if (!line || line.startsWith('#') || !line.includes('=')) continue;
+            const idx = line.indexOf('=');
+            const key = line.slice(0, idx);
+            const value = line.slice(idx + 1).replace(/^"|"$/g, '');
+            out[key] = value;
+        }
+        return out;
+    } catch {
+        return {};
+    }
 }
 
-function buildArgs(buildVignettes, resaveData, md5, user) {
-    let args = ['R', 'CMD', 'build', '.'];
-    if (!buildVignettes) {
-        args.push("--no-build-vignettes");
+function getPlatformTag() {
+    if (process.platform === 'linux') {
+        const rel = parseOsRelease();
+        const id = (rel.ID || 'linux').toLowerCase();
+        const major = (rel.VERSION_ID || '0').split('.')[0];
+        // Fail at build time rather than letting deploy-prism reject the
+        // binary at release time — both sides read shared/platforms.json.
+        if (!(id in LINUX_ID_MAP)) {
+            throw Error(`Unsupported linux distro "${id}" (from /etc/os-release) — add it to shared/platforms.json`);
+        }
+        return `linux_${id}${major}`; // e.g. linux_ubuntu22, linux_rhel9, linux_alma8
     }
-    if (!resaveData) {
-        args.push("--no-resave-data");
+    if (process.platform === 'darwin') {
+        return `macos`;
     }
-    if (md5) {
-        args.push("--md5")
+    if (process.platform === 'win32') {
+        return `windows`;
     }
-    if (user) {
-        args.push(`--user=${user}`)
-    }
-    return args;
+
+    return process.platform;
 }
 
-function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
-    const args = buildArgs(buildVignettes, resaveData, md5, user);
+function getRMinorVersion() {
+    // e.g. 4.4.1 -> 4.4
+    const full = execSync('Rscript -e "cat(as.character(getRversion()))"', { encoding: 'utf8' }).trim();
+    const parts = full.split('.');
+    return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : full;
+}
+
+function getBuildTagParts() {
+    return {
+        platformTag: getPlatformTag(), // e.g. linux_ubuntu22 / macos / windows
+        archTag: process.arch,
+        rVersion: getRMinorVersion(),
+    };
+}
+
+function decomposePlatformTag(platformTag) {
+    const match = platformTag.match(/^([^_]+)_(.+)$/);
+    if (match) {
+        return { os: match[1], os_codename: match[2] };
+    }
+    return { os: platformTag, os_codename: platformTag };
+}
+
+// Resolves each LinkingTo dep's version from its installed DESCRIPTION.
+// Builtin (base/recommended) packages are excluded unless opted in.
+function resolveLinkedTo(linkingToDeps, libraryPath, includeBuiltinLinkingToDeps) {
+    const resolvedLibraryPath = path.resolve(libraryPath);
+    const linkedTo = {};
+    for (const dep of linkingToDeps) {
+        if (!includeBuiltinLinkingToDeps && builtinPackages.includes(dep)) {
+            continue;
+        }
+        try {
+            const depDescPath = path.join(resolvedLibraryPath, dep, 'DESCRIPTION');
+            const depDesc = parseDescriptionFile(depDescPath);
+            linkedTo[dep] = depDesc['Version'] || 'unknown';
+        } catch (err) {
+            console.warn(`Warning: could not read DESCRIPTION for LinkingTo dep "${dep}": ${err.message}`);
+            linkedTo[dep] = 'unknown';
+        }
+    }
+    return linkedTo;
+}
+
+function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
+    const originalCwd = process.cwd();
+    const libraryPath = path.resolve(originalCwd, libraryDir);
+    let args = ['R', 'CMD', 'INSTALL', '-l', libraryPath, srcTarballPath, '--use-vanilla', '--strip', '--strip-lib', '--clean', '--build'];
+    const tmpDir = path.join(originalCwd, 'tmp_output');
 
     console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
 
     try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+        process.chdir(tmpDir);
         execSync(args.join(" "), {
             // Capture stdout and stderr from child process. Overrides the
             // default behavior of streaming child stderr to the parent stderr
@@ -26091,6 +26174,13 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
                 "R_LIBS_USER": libraryPath,
             }
         });
+
+        const { platformTag, archTag, rVersion } = getBuildTagParts();
+        const filename = renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion);
+        const src = path.join(tmpDir, filename);
+        const dest = path.join(originalCwd, filename);
+        fs.renameSync(src, dest);
+        return { filename, platformTag, archTag, rVersion };
     } catch (err) {
         if (err.code) {
             // Spawning child process failed
@@ -26103,22 +26193,23 @@ function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
             console.log(err);
             throw Error(`Failed to build package:\nstdout:\n${stdout}\nstderr:${stderr}`);
         }
+    } finally {
+        process.chdir(originalCwd);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 }
 
-// We want a non null object where the values can only be string/number/boolean
-function validateMetadata(obj) {
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
-        return false;
-    }
-
-    return Object.values(obj).every(value => {
-        const type = typeof value;
-        return type === 'string' || type === 'number' || type === 'boolean';
-    });
-}
-
-module.exports = { getTarballs, updateDescriptionFile, buildArgs, buildPackage, validateMetadata };
+module.exports = {
+    getExtension,
+    renameBinaryArchive,
+    parseOsRelease,
+    getPlatformTag,
+    getRMinorVersion,
+    getBuildTagParts,
+    decomposePlatformTag,
+    resolveLinkedTo,
+    buildPackageBinary,
+};
 
 
 /***/ }),
@@ -27746,6 +27837,22 @@ function parseParams (str) {
 module.exports = parseParams
 
 
+/***/ }),
+
+/***/ 2459:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('["base","compiler","datasets","graphics","grDevices","grid","methods","parallel","splines","stats","stats4","tcltk","tools","utils","boot","class","cluster","codetools","foreign","KernSmooth","lattice","MASS","Matrix","mgcv","nlme","nnet","rpart","spatial","survival"]');
+
+/***/ }),
+
+/***/ 8832:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('{"comment":"Single source of truth mapping /etc/os-release IDs (as embedded in binary platform tags, e.g. linux_alma8) to the OS names PRISM expects. build-bin validates against this at build time and deploy-prism maps with it at deploy time, so a distro that builds cannot fail at deploy.","linux_id_map":{"ubuntu":"ubuntu","debian":"debian","rhel":"redhat","alma":"almalinux","almalinux":"almalinux","rocky":"rocky","centos":"centos","fedora":"fedora","amzn":"amazon","sles":"sles"}}');
+
 /***/ })
 
 /******/ 	});
@@ -27789,66 +27896,51 @@ module.exports = parseParams
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(6618);
 const path = __nccwpck_require__(6928);
-const { parseDescriptionFile, writeManifest, parseLinkingTo } = __nccwpck_require__(5229);
-const { getTarballs, updateDescriptionFile, buildPackage, validateMetadata } = __nccwpck_require__(5848);
+const { updateManifest } = __nccwpck_require__(5229);
+const { decomposePlatformTag, resolveLinkedTo, buildPackageBinary } = __nccwpck_require__(5848);
 
 // For now we assume the current directory is where the DESCRIPTION file is located
-// We will a few things:
-// 1. Update DESCRIPTION file to include metadata given, git sha
-// 2. Run R CMD build . + some arguments depending on workflow params
+// TO reapproach description modding later
 try {
     const libraryPath = core.getInput('library');
-    const metadata = JSON.parse(core.getInput('metadata'));
-    if (!validateMetadata(metadata)) {
-        throw Error("Metadata is not a valid object: it should only contain string/number/boolean values.");
-    }
-    metadata["GitOrigin"] = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
-    metadata["GitSHA"] = process.env.GITHUB_SHA
-    const buildVignettes = core.getInput('build-vignettes') === 'true';
-    const resaveData = core.getInput('resave-data') === 'true';
-    const md5 = core.getInput('md5') === 'true';
-    const user = core.getInput('user') || undefined;
+    const srcTarballPath = core.getInput('src_tarball_path');
 
     console.log("Library:", libraryPath);
-    console.log("Metadata:", metadata);
-    console.log("Build vignettes:", buildVignettes);
-    console.log("resave data:", resaveData);
-    console.log("md5:", md5);
-    console.log("user:", user);
+    console.log("Src tarball path:", srcTarballPath);
 
-    const tarballs = getTarballs();
-    updateDescriptionFile(metadata);
-    buildPackage(libraryPath, buildVignettes, resaveData, md5, user);
-    const updatedTarballs = getTarballs();
-    const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
-    if (diff.size === 0) {
-        throw Error("R CMD build did not create a tarball");
-    }
-    if (diff.size > 1) {
-        throw Error(`R CMD build created several tarballs: ${[...diff].join(', ')}`);
-    }
-    const [tarballName] = [...diff];
-    core.setOutput("tarball_path", path.resolve(".", tarballName));
-    core.setOutput("tarball_name", tarballName);
+    // Extract package name/version from source tarball filename
+    const srcTarballName = path.basename(srcTarballPath);
+    const srcMatch = srcTarballName.match(/^(.+?)_(.+?)\.tar\.gz$/);
+    const pkgName = srcMatch ? srcMatch[1] : srcTarballName;
+    const pkgVersion = srcMatch ? srcMatch[2] : 'unknown';
 
-    // Generate manifest entry for source tarball
+    const { filename, platformTag, archTag, rVersion } = buildPackageBinary(libraryPath, srcTarballPath, pkgName, pkgVersion);
+    core.setOutput("binary_path", path.resolve(".", filename));
+    core.setOutput("binary_name", filename);
+
+    // Generate manifest entry for binary
     const manifestPath = core.getInput('manifest_path') || 'manifest.json';
-    const desc = parseDescriptionFile('DESCRIPTION');
-    const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
-    const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
+    const linkingToDeps = JSON.parse(core.getInput('linking_to_deps') || '[]');
+    const includeBuiltinLinkingToDeps = core.getInput('include_builtin_linking_to_deps') === 'true';
+
+    const linkedTo = resolveLinkedTo(linkingToDeps, libraryPath, includeBuiltinLinkingToDeps);
+
+    const { os, os_codename } = decomposePlatformTag(platformTag);
 
     const manifest = {
-        [tarballName]: {
-            package: desc['Package'],
-            version: desc['Version'],
-            type: 'source',
-            needs_compilation: needsCompilation,
-            ...metadata,
+        [filename]: {
+            package: pkgName,
+            version: pkgVersion,
+            type: 'binary',
+            os,
+            os_codename,
+            arch: archTag,
+            r_version: rVersion,
+            linked_to: linkedTo,
         },
     };
-    writeManifest(manifestPath, manifest);
+    updateManifest(manifestPath, manifest);
     core.setOutput("manifest_path", path.resolve(manifestPath));
-    core.setOutput("linking_to_deps", JSON.stringify(linkingToDeps));
 
 } catch (error) {
     core.setFailed(error.message);

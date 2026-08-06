@@ -25734,6 +25734,79 @@ module.exports = { parseFields, fieldValue, parseDescription, updateDescription 
 
 /***/ }),
 
+/***/ 6305:
+/***/ ((module) => {
+
+// Dependency-free runtime validation of the manifest format documented in
+// shared/schemas/manifest.schema.json — keep the two in sync. No third-party
+// validator here because deploy-prism runs this without an npm install.
+
+const SCALAR_TYPES = new Set(['string', 'number', 'boolean']);
+
+function isPlainObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireString(entry, key, filename, errors) {
+    if (typeof entry[key] !== 'string' || entry[key].length === 0) {
+        errors.push(`${filename}: "${key}" must be a non-empty string`);
+    }
+}
+
+function validateEntry(filename, entry, errors) {
+    if (!isPlainObject(entry)) {
+        errors.push(`${filename}: entry must be an object`);
+        return;
+    }
+
+    requireString(entry, 'package', filename, errors);
+    requireString(entry, 'version', filename, errors);
+
+    if (entry.type === 'source') {
+        if (typeof entry.needs_compilation !== 'boolean') {
+            errors.push(`${filename}: "needs_compilation" must be a boolean`);
+        }
+        for (const [key, value] of Object.entries(entry)) {
+            if (key === 'needs_compilation') continue;
+            if (!SCALAR_TYPES.has(typeof value)) {
+                errors.push(`${filename}: metadata field "${key}" must be a string/number/boolean`);
+            }
+        }
+    } else if (entry.type === 'binary') {
+        for (const key of ['os', 'os_codename', 'arch', 'r_version']) {
+            requireString(entry, key, filename, errors);
+        }
+        if (!isPlainObject(entry.linked_to)) {
+            errors.push(`${filename}: "linked_to" must be an object`);
+        } else {
+            for (const [dep, version] of Object.entries(entry.linked_to)) {
+                if (typeof version !== 'string') {
+                    errors.push(`${filename}: linked_to["${dep}"] must be a string`);
+                }
+            }
+        }
+    } else {
+        errors.push(`${filename}: "type" must be "source" or "binary" (got ${JSON.stringify(entry.type)})`);
+    }
+}
+
+// Returns a list of human-readable problems; empty means valid.
+function validateManifest(manifest) {
+    if (!isPlainObject(manifest)) {
+        return ['manifest must be a JSON object keyed by artifact filename'];
+    }
+    const errors = [];
+    for (const [filename, entry] of Object.entries(manifest)) {
+        validateEntry(filename, entry, errors);
+    }
+    return errors;
+}
+
+module.exports = { validateManifest };
+
+
+/***/ }),
+
 /***/ 5229:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -25871,14 +25944,6 @@ module.exports = require("https");
 
 "use strict";
 module.exports = require("net");
-
-/***/ }),
-
-/***/ 1421:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:child_process");
 
 /***/ }),
 
@@ -26031,95 +26096,6 @@ module.exports = require("worker_threads");
 
 "use strict";
 module.exports = require("zlib");
-
-/***/ }),
-
-/***/ 5848:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const fs = __nccwpck_require__(3024);
-const { execSync } = __nccwpck_require__(1421);
-const { updateDescription } = __nccwpck_require__(6736);
-
-function getTarballs() {
-    const items = fs.readdirSync('.');
-    const files = items.filter(item => {
-        return fs.statSync(item).isFile() && item.endsWith(".tar.gz");
-    });
-
-    return new Set(files);
-}
-
-function updateDescriptionFile(metadata) {
-    const content = fs.readFileSync('DESCRIPTION', 'utf8');
-    const updatedContent = updateDescription(content, { set: metadata, remove: ['Remotes'] });
-    fs.writeFileSync('DESCRIPTION', updatedContent);
-
-    return updatedContent;
-}
-
-function buildArgs(buildVignettes, resaveData, md5, user) {
-    let args = ['R', 'CMD', 'build', '.'];
-    if (!buildVignettes) {
-        args.push("--no-build-vignettes");
-    }
-    if (!resaveData) {
-        args.push("--no-resave-data");
-    }
-    if (md5) {
-        args.push("--md5")
-    }
-    if (user) {
-        args.push(`--user=${user}`)
-    }
-    return args;
-}
-
-function buildPackage(libraryPath, buildVignettes, resaveData, md5, user) {
-    const args = buildArgs(buildVignettes, resaveData, md5, user);
-
-    console.log(`Running "${args.join(" ")}" and using ${libraryPath} as library`);
-
-    try {
-        execSync(args.join(" "), {
-            // Capture stdout and stderr from child process. Overrides the
-            // default behavior of streaming child stderr to the parent stderr
-            stdio: 'pipe',
-            env: {
-                ...process.env,
-                "R_LIBS_SITE": libraryPath,
-                "R_LIBS_USER": libraryPath,
-            }
-        });
-    } catch (err) {
-        if (err.code) {
-            // Spawning child process failed
-            console.error(err.code);
-            throw Error("Failed to start build.");
-        } else {
-            // Child was spawned but exited with non-zero exit code
-            // Error contains any stdout and stderr from the child
-            const { stdout, stderr } = err;
-            console.log(err);
-            throw Error(`Failed to build package:\nstdout:\n${stdout}\nstderr:${stderr}`);
-        }
-    }
-}
-
-// We want a non null object where the values can only be string/number/boolean
-function validateMetadata(obj) {
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
-        return false;
-    }
-
-    return Object.values(obj).every(value => {
-        const type = typeof value;
-        return type === 'string' || type === 'number' || type === 'boolean';
-    });
-}
-
-module.exports = { getTarballs, updateDescriptionFile, buildArgs, buildPackage, validateMetadata };
-
 
 /***/ }),
 
@@ -27788,68 +27764,88 @@ module.exports = parseParams
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(6618);
+const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
-const { parseDescriptionFile, writeManifest, parseLinkingTo } = __nccwpck_require__(5229);
-const { getTarballs, updateDescriptionFile, buildPackage, validateMetadata } = __nccwpck_require__(5848);
+const { writeManifest } = __nccwpck_require__(5229);
+const { validateManifest } = __nccwpck_require__(6305);
 
-// For now we assume the current directory is where the DESCRIPTION file is located
-// We will a few things:
-// 1. Update DESCRIPTION file to include metadata given, git sha
-// 2. Run R CMD build . + some arguments depending on workflow params
+function findManifests(dir, glob) {
+    const results = [];
+    // Convert glob to regex: **/manifest.json -> match manifest.json at any depth
+    const pattern = new RegExp(
+        '^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '{{GLOBSTAR}}').replace(/\*/g, '[^/]*').replace(/\{\{GLOBSTAR\}\}/g, '.*') + '$'
+    );
+
+    function walk(currentDir) {
+        for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+            const full = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+            } else {
+                const rel = path.relative(dir, full);
+                if (pattern.test(rel)) {
+                    results.push(full);
+                }
+            }
+        }
+    }
+
+    walk(dir);
+    return results;
+}
+
 try {
-    const libraryPath = core.getInput('library');
-    const metadata = JSON.parse(core.getInput('metadata'));
-    if (!validateMetadata(metadata)) {
-        throw Error("Metadata is not a valid object: it should only contain string/number/boolean values.");
+    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+    const manifestDirInput = core.getInput('manifest_dir') || 'manifests';
+    const manifestGlob = core.getInput('manifest_glob') || '**/manifest.json';
+    const manifestDir = path.resolve(workspace, manifestDirInput);
+
+    console.log(`Workspace: ${workspace}`);
+    console.log(`Manifest directory: ${manifestDir}`);
+
+    if (!fs.existsSync(manifestDir)) {
+        throw new Error(`Manifest directory "${manifestDir}" does not exist`);
     }
-    metadata["GitOrigin"] = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`
-    metadata["GitSHA"] = process.env.GITHUB_SHA
-    const buildVignettes = core.getInput('build-vignettes') === 'true';
-    const resaveData = core.getInput('resave-data') === 'true';
-    const md5 = core.getInput('md5') === 'true';
-    const user = core.getInput('user') || undefined;
 
-    console.log("Library:", libraryPath);
-    console.log("Metadata:", metadata);
-    console.log("Build vignettes:", buildVignettes);
-    console.log("resave data:", resaveData);
-    console.log("md5:", md5);
-    console.log("user:", user);
-
-    const tarballs = getTarballs();
-    updateDescriptionFile(metadata);
-    buildPackage(libraryPath, buildVignettes, resaveData, md5, user);
-    const updatedTarballs = getTarballs();
-    const diff = new Set([...updatedTarballs].filter(x => !tarballs.has(x)));
-    if (diff.size === 0) {
-        throw Error("R CMD build did not create a tarball");
+    const files = findManifests(manifestDir, manifestGlob);
+    if (files.length === 0) {
+        throw new Error(`No files matched "${manifestGlob}" in "${manifestDir}"`);
     }
-    if (diff.size > 1) {
-        throw Error(`R CMD build created several tarballs: ${[...diff].join(', ')}`);
+
+    console.log(`Found ${files.length} manifest file(s):`);
+
+    const merged = {};
+    const sources = {};
+    for (const file of files) {
+        let data;
+        try {
+            data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (err) {
+            throw new Error(`Failed to parse manifest "${file}": ${err.message}`);
+        }
+        const count = Object.keys(data).length;
+        console.log(`  ${file} (${count} entry/entries)`);
+        for (const [key, entry] of Object.entries(data)) {
+            if (key in merged && JSON.stringify(merged[key]) !== JSON.stringify(entry)) {
+                throw new Error(
+                    `Manifest entry "${key}" in "${file}" conflicts with the entry already merged from "${sources[key]}"`
+                );
+            }
+            merged[key] = entry;
+            sources[key] = file;
+        }
     }
-    const [tarballName] = [...diff];
-    core.setOutput("tarball_path", path.resolve(".", tarballName));
-    core.setOutput("tarball_name", tarballName);
 
-    // Generate manifest entry for source tarball
-    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
-    const desc = parseDescriptionFile('DESCRIPTION');
-    const needsCompilation = (desc['NeedsCompilation'] || 'no').toLowerCase() === 'yes';
-    const linkingToDeps = parseLinkingTo(desc['LinkingTo']);
+    const problems = validateManifest(merged);
+    if (problems.length > 0) {
+        throw new Error(`Merged manifest is invalid:\n${problems.join('\n')}`);
+    }
 
-    const manifest = {
-        [tarballName]: {
-            package: desc['Package'],
-            version: desc['Version'],
-            type: 'source',
-            needs_compilation: needsCompilation,
-            ...metadata,
-        },
-    };
-    writeManifest(manifestPath, manifest);
-    core.setOutput("manifest_path", path.resolve(manifestPath));
-    core.setOutput("linking_to_deps", JSON.stringify(linkingToDeps));
+    const outputPath = path.resolve(workspace, 'manifest.json');
+    writeManifest(outputPath, merged);
+    console.log(`Wrote merged manifest with ${Object.keys(merged).length} entries`);
 
+    core.setOutput('manifest_path', outputPath);
 } catch (error) {
     core.setFailed(error.message);
 }

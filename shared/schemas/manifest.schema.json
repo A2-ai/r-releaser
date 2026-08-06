@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/A2-ai/r-releaser/main/shared/schemas/manifest.schema.json",
+  "title": "r-releaser manifest",
+  "description": "Metadata sidecar produced by build-src/build-bin, merged by merge-manifests, attached to the GitHub Release as manifest.json, and consumed by deploy-prism. Keys are release asset filenames; values describe the artifact. Runtime validation is implemented dependency-free in shared/manifest-schema.js and must be kept in sync with this file.",
+  "type": "object",
+  "additionalProperties": {
+    "oneOf": [
+      { "$ref": "#/definitions/sourceEntry" },
+      { "$ref": "#/definitions/binaryEntry" }
+    ]
+  },
+  "definitions": {
+    "sourceEntry": {
+      "type": "object",
+      "description": "Written by build-src for the source tarball. Carries caller metadata (arbitrary scalar fields, e.g. PrismRemoteRef, GitOrigin, GitSHA) used by deploy workflows to resolve provenance.",
+      "required": ["package", "version", "type", "needs_compilation"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "type": { "const": "source" },
+        "needs_compilation": { "type": "boolean" }
+      },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "binaryEntry": {
+      "type": "object",
+      "description": "Written by build-bin per built binary. os_codename embeds the /etc/os-release ID plus major version (e.g. almalinux8) and must map through shared/platforms.json at deploy time.",
+      "required": ["package", "version", "type", "os", "os_codename", "arch", "r_version", "linked_to"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "type": { "const": "binary" },
+        "os": { "type": "string", "minLength": 1 },
+        "os_codename": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "r_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+" },
+        "linked_to": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    }
+  }
+}

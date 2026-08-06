@@ -1,0 +1,168 @@
+name: 'Update PRISM edition'
+description: 'Updates a package version in an existing mutable PRISM edition'
+
+inputs:
+  prism_api_url:
+    description: 'Base URL of the PRISM API'
+    required: true
+  auth_token:
+    description: 'Bearer token for authenticating with PRISM'
+    required: true
+  registry:
+    description: 'Registry name (e.g. hyperion-eco)'
+    required: true
+  edition:
+    description: 'Edition name (e.g. dev)'
+    required: true
+  package_name:
+    description: 'Package to update'
+    required: true
+  package_version:
+    description: 'New version for the package'
+    required: true
+  force:
+    description: >-
+      If true, send ?force=true on the edition PUT. This lets the API update an
+      immutable or protected ("latest") edition and bypasses linkedToHash
+      verification failures; the local mutability check is skipped accordingly.
+    required: false
+    default: 'false'
+  retry_count:
+    description: 'Number of attempts for the update cycle on 429/5xx/network errors'
+    required: false
+    default: '3'
+
+runs:
+  using: 'composite'
+  steps:
+    - id: mask
+      name: Mask sensitive inputs
+      shell: bash
+      env:
+        AUTH_TOKEN: ${{ inputs.auth_token }}
+      run: |
+        echo "::add-mask::${AUTH_TOKEN}"
+
+    - id: update-edition
+      name: Update edition
+      shell: bash
+      env:
+        PRISM_API_URL: ${{ inputs.prism_api_url }}
+        AUTH_TOKEN: ${{ inputs.auth_token }}
+        REGISTRY: ${{ inputs.registry }}
+        EDITION: ${{ inputs.edition }}
+        PACKAGE: ${{ inputs.package_name }}
+        VERSION: ${{ inputs.package_version }}
+        FORCE: ${{ inputs.force }}
+        RETRY_COUNT: ${{ inputs.retry_count }}
+      run: |
+        set -euo pipefail
+
+        EDITION_URL="${PRISM_API_URL}/registries/${REGISTRY}/editions/${EDITION}"
+        PUT_URL="${EDITION_URL}"
+        if [ "${FORCE}" = "true" ]; then
+          PUT_URL="${EDITION_URL}?force=true"
+        fi
+
+        echo "::group::Update edition (registry: ${REGISTRY}, edition: ${EDITION}, package: ${PACKAGE}, version: ${VERSION})"
+
+        # Retries re-run the whole GET -> build -> PUT cycle so each attempt
+        # works from a fresh read of the edition, which also narrows the window
+        # for concurrent-update races.
+        attempt=1
+        backoff=2
+        while :; do
+          if [ "$attempt" -gt 1 ]; then
+            echo "Attempt ${attempt}/${RETRY_COUNT}"
+          fi
+
+          retry_reason=""
+
+          # 1. GET current edition
+          if ! response=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${AUTH_TOKEN}" \
+            "${EDITION_URL}"); then
+            retry_reason="GET ${EDITION_URL} failed (connection/DNS/TLS error)"
+          else
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | sed '$d')
+
+            if [[ "$http_code" -eq 429 || "$http_code" -ge 500 ]]; then
+              retry_reason="GET ${EDITION_URL} returned ${http_code}"
+            elif [[ "$http_code" -ne 200 ]]; then
+              echo "::error::GET ${EDITION_URL} returned ${http_code}"
+              echo "$body"
+              exit 1
+            fi
+          fi
+
+          if [ -z "$retry_reason" ]; then
+            # 2. Verify edition is mutable (force bypasses; the API accepts forced updates of immutable editions)
+            if [[ "$(echo "$body" | jq -r '.mutable')" != "true" ]]; then
+              if [ "${FORCE}" = "true" ]; then
+                echo "Edition ${REGISTRY}/${EDITION} is immutable; proceeding because force=true"
+              else
+                echo "::error::Edition ${REGISTRY}/${EDITION} is immutable and cannot be updated (set force to override)"
+                exit 1
+              fi
+            fi
+
+            # 3. Verify package exists in edition
+            if ! echo "$body" | jq -e --arg pkg "$PACKAGE" '.packages[] | select(.name == $pkg)' > /dev/null 2>&1; then
+              echo "::error::Package '${PACKAGE}' is not a member of ${REGISTRY}/${EDITION}. This action can only bump the version of an existing member — add the package to the edition in PRISM first."
+              exit 1
+            fi
+
+            # 4. Build PUT body:
+            #    - Target package: set new version, drop linkedToHash (let server resolve latest binary)
+            #    - Other packages: preserve version and linkedToHash (converted from response map to request array)
+            #    - Preserve existing platforms from the edition
+            put_body=$(echo "$body" | jq --arg pkg "$PACKAGE" --arg ver "$VERSION" '{
+              packages: [.packages[] | if .name == $pkg then
+                {name, version: $ver}
+              else
+                {name, version} + (if .linkedToHash then
+                  {linkedToHash: [.linkedToHash | to_entries[] | {r_version: .key, hash: .value}]}
+                else {} end)
+              end],
+              platforms: [.platforms[] | {os, r_version, codename, architecture}]
+            }')
+
+            echo "PUT body:"
+            echo "$put_body" | jq .
+
+            # 5. PUT updated edition
+            if ! put_response=$(curl -sS -w "\n%{http_code}" -X PUT \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$put_body" \
+              "${PUT_URL}"); then
+              retry_reason="PUT ${PUT_URL} failed (connection/DNS/TLS error)"
+            else
+              put_http_code=$(echo "$put_response" | tail -n1)
+              put_body_resp=$(echo "$put_response" | sed '$d')
+
+              if [[ "$put_http_code" -eq 200 ]]; then
+                echo "Updated ${PACKAGE} to ${VERSION} in ${REGISTRY}/${EDITION}"
+                echo "$put_body_resp"
+                echo "::endgroup::"
+                exit 0
+              elif [[ "$put_http_code" -eq 429 || "$put_http_code" -ge 500 ]]; then
+                retry_reason="PUT ${PUT_URL} returned ${put_http_code}"
+              else
+                echo "::error::PUT ${PUT_URL} returned ${put_http_code}"
+                echo "$put_body_resp"
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ "$attempt" -ge "${RETRY_COUNT}" ]; then
+            echo "::error::${retry_reason} (giving up after ${attempt} attempts)"
+            exit 1
+          fi
+          echo "::warning::${retry_reason}; retrying in ${backoff}s"
+          sleep "$backoff"
+          backoff=$((backoff * 2))
+          attempt=$((attempt + 1))
+        done

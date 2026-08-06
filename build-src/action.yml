@@ -19,12 +19,19 @@ inputs:
     default: 'true'
   user:
     description: 'The tarball creator'
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+    default: 'manifest.json'
 
 outputs:
   tarball_path:
     description: 'Path to the source tarball'
   tarball_name:
     description: 'Name of the source tarball'
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+  linking_to_deps:
+    description: 'JSON array of LinkingTo dependency package names'
 
 runs:
   using: 'node20'

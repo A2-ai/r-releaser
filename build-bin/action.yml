@@ -1,0 +1,31 @@
+name: 'r-releaser binary builder'
+description: 'Builds a binary R package'
+
+inputs:
+  src_tarball_path:
+    description: 'Path to the source tarball'
+    required: true
+  library:
+    description: 'Where are the dependencies installed'
+    required: true
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+    default: 'manifest.json'
+  linking_to_deps:
+    description: 'JSON array of LinkingTo dependency package names (from build-src output)'
+    default: '[]'
+  include_builtin_linking_to_deps:
+    description: 'Whether to include packages built into R as specific linking to dependencies'
+    default: 'false'
+
+outputs:
+  binary_path:
+    description: 'Path to the binary archive'
+  binary_name:
+    description: 'Name of the binary archive'
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

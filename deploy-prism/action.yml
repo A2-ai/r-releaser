@@ -1,0 +1,288 @@
+name: 'r-releaser prism ingestion'
+description: 'Downloads release assets from a GitHub Release and uploads them to PRISM'
+
+inputs:
+  prism_api_url:
+    description: 'Base URL of the PRISM API'
+    required: true
+  auth_token:
+    description: 'Bearer token for authenticating with PRISM'
+    required: true
+  release_tag:
+    description: 'The GitHub Release tag whose assets will be downloaded and uploaded'
+    required: true
+  package_name:
+    description: 'Package name for API path construction and logging (defaults to repository name)'
+    required: false
+    default: ''
+  retry_count:
+    description: 'Maximum number of upload attempts per file'
+    required: false
+    default: '3'
+  dry_run:
+    description: 'If true, lists release assets without uploading'
+    required: false
+    default: 'false'
+  skip:
+    description: >-
+      Comma-separated skip rules. Each rule is one or more tokens joined with "+" (AND);
+      rules are OR-ed. Tokens match a manifest entry's os, os_codename, or r_version.
+      e.g. "windows+4.3, ubuntu22, 4.2" skips windows builds on R 4.3, all ubuntu22 builds,
+      and all R 4.2 builds.
+    required: false
+    default: ''
+  no_sys_deps:
+    description: >-
+      If true, declare this package's linux binaries portable across distros and send
+      ?no_sys_deps=true on their POST. Applied only to linux binary uploads; source and
+      non-linux binaries are never flagged. The API verifies portability on ingestion.
+    required: false
+    default: 'false'
+  force:
+    description: >-
+      If true, send ?force=true alongside ?no_sys_deps=true on linux binary POSTs,
+      bypassing the covered_by_existing 409 a lower-glibc no_sys_deps archive would
+      otherwise trigger. The API only accepts force together with no_sys_deps, so this
+      input has no effect unless no_sys_deps is also true.
+    required: false
+    default: 'false'
+
+outputs:
+  uploaded-count:
+    description: 'Number of successfully uploaded assets'
+    value: ${{ steps.upload.outputs.uploaded-count }}
+  failed-count:
+    description: 'Number of failed asset uploads'
+    value: ${{ steps.upload.outputs.failed-count }}
+  uploaded-assets:
+    description: 'JSON array of successfully uploaded asset filenames'
+    value: ${{ steps.upload.outputs.uploaded-assets }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: mask
+      name: Mask sensitive inputs
+      shell: bash
+      run: |
+        echo "::add-mask::${{ inputs.auth_token }}"
+
+    - id: download
+      name: Download release assets
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        RELEASE_TAG="${{ inputs.release_tag }}"
+        DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
+        mkdir -p "${DOWNLOAD_DIR}"
+
+        echo "::group::Download release assets for ${RELEASE_TAG}"
+        gh release download "${RELEASE_TAG}" --dir "${DOWNLOAD_DIR}" --skip-existing
+        ASSET_COUNT=$(find "${DOWNLOAD_DIR}" -maxdepth 1 -type f | wc -l | tr -d ' ')
+        echo "Downloaded ${ASSET_COUNT} asset(s):"
+        ls -lh "${DOWNLOAD_DIR}"
+        echo "::endgroup::"
+
+        if [ "${ASSET_COUNT}" -eq 0 ]; then
+          echo "::error::No assets found in release ${RELEASE_TAG}"
+          exit 1
+        fi
+
+    - id: prepare
+      name: Prepare binary packages
+      if: inputs.dry_run != 'true'
+      shell: bash
+      env:
+        SKIP_RULES: ${{ inputs.skip }}
+      run: |
+        set -euo pipefail
+        DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
+        MANIFEST="${DOWNLOAD_DIR}/manifest.json"
+        if [ ! -f "${MANIFEST}" ]; then
+          echo "::error::No manifest.json found in release assets; cannot prepare binaries"
+          exit 1
+        else
+          echo "::group::Prepare binary packages"
+          node "${{ github.action_path }}/prepare-binaries.js" "${DOWNLOAD_DIR}"
+          echo "::endgroup::"
+        fi
+
+    - id: list-assets
+      name: List release assets (dry-run)
+      if: inputs.dry_run == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        RELEASE_TAG="${{ inputs.release_tag }}"
+        ASSET_COUNT=$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets | length')
+
+        if [ "${ASSET_COUNT}" -eq 0 ]; then
+          echo "::error::No assets found in release ${RELEASE_TAG}"
+          exit 1
+        fi
+
+        echo "::group::Dry-run: assets in release ${RELEASE_TAG}"
+        gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name'
+        echo "Found ${ASSET_COUNT} asset(s)."
+        echo "::endgroup::"
+
+    - id: upload
+      name: Upload assets to PRISM
+      if: inputs.dry_run != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        PRISM_API_URL="${{ inputs.prism_api_url }}"
+        AUTH_TOKEN="${{ inputs.auth_token }}"
+        RETRY_COUNT="${{ inputs.retry_count }}"
+        DOWNLOAD_DIR="${RUNNER_TEMP}/deploy-release-assets"
+        PACKAGE_NAME="${{ inputs.package_name }}"
+        NO_SYS_DEPS="${{ inputs.no_sys_deps }}"
+        FORCE="${{ inputs.force }}"
+
+        if [ -z "${PACKAGE_NAME}" ]; then
+          PACKAGE_NAME="${GITHUB_REPOSITORY##*/}"
+        fi
+
+        UPLOAD_URL="${PRISM_API_URL}/packages"
+
+        uploaded_count=0
+        failed_count=0
+        uploaded_assets_file="$(mktemp)"
+
+        upload_file() {
+          local file_path="$1"
+          local file_name
+          file_name="$(basename "${file_path}")"
+          local attempt=0
+          local wait_seconds=2
+
+          # declare linux binaries as portable.
+          # source and non-linux binaries are never marked no_sys_deps, and the
+          # API rejects force without no_sys_deps, so both flags stay in this branch.
+          local params=""
+          if [ "${NO_SYS_DEPS}" = "true" ]; then
+            local ptype pos
+            ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+            pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+            if [ "${ptype}" = "binary" ] && [ "${pos}" = "linux" ]; then
+              params="no_sys_deps=true"
+              if [ "${FORCE}" = "true" ]; then
+                params="${params}&force=true"
+              fi
+            fi
+          fi
+          local query="${params:+?${params}}"
+
+          # Retry policy:
+          # - 2xx: success
+          # - 409: idempotent success (already uploaded)
+          # - 4xx (except 429): non-retryable failure
+          # - 429 and non-4xx failures (e.g., 5xx/network): retry with backoff
+          while [ "${attempt}" -lt "${RETRY_COUNT}" ]; do
+            attempt=$((attempt + 1))
+            echo "  Attempt ${attempt}/${RETRY_COUNT} for ${file_name}..."
+
+            local response_file
+            response_file=$(mktemp)
+            local http_code
+            http_code=$(curl --silent \
+              --output "${response_file}" \
+              --write-out "%{http_code}" \
+              --connect-timeout 30 \
+              --max-time 600 \
+              -X POST \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              -H "X-Filename: ${file_name}" \
+              --data-binary "@${file_path}" \
+              "${UPLOAD_URL}${query}" || true)
+
+            local response_body
+            response_body=$(cat "${response_file}" 2>/dev/null || echo "")
+            rm -f "${response_file}"
+
+            if [[ "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+              echo "  Uploaded ${file_name} (HTTP ${http_code})"
+              return 0
+            fi
+
+            # Treat duplicate uploads as idempotent success, but surface the
+            # conflict variant so covered_by_existing (fixable with force=true)
+            # is distinguishable from a plain re-upload.
+            if [ "${http_code}" = "409" ]; then
+              local conflict
+              conflict=$(echo "${response_body}" | jq -r '.error // empty' 2>/dev/null || true)
+              if [ "${conflict}" = "covered_by_existing" ]; then
+                echo "::warning::${file_name} was NOT ingested (HTTP 409 covered_by_existing) - a lower-glibc no_sys_deps archive already covers it. Re-run with force=true to ingest anyway. Response: ${response_body}"
+              else
+                echo "::warning::${file_name} already exists on server (HTTP 409${conflict:+ ${conflict}}); treating as success. Response: ${response_body}"
+              fi
+              return 0
+            fi
+
+            # Non-retryable client errors should fail fast.
+            if [[ "${http_code}" =~ ^4[0-9][0-9]$ ]] && [ "${http_code}" != "429" ]; then
+              echo "::error::Non-retryable upload failure for ${file_name}: HTTP ${http_code} - ${response_body}"
+              return 1
+            fi
+
+            echo "::warning::Retryable upload attempt ${attempt} failed for ${file_name}: HTTP ${http_code} - ${response_body}"
+
+            if [ "${attempt}" -lt "${RETRY_COUNT}" ]; then
+              echo "  Retrying in ${wait_seconds}s..."
+              sleep "${wait_seconds}"
+              wait_seconds=$((wait_seconds * 2))
+            fi
+          done
+
+          echo "::error::Failed to upload ${file_name} after ${RETRY_COUNT} attempt(s)"
+          return 1
+        }
+
+        if [ "${FORCE}" = "true" ] && [ "${NO_SYS_DEPS}" != "true" ]; then
+          echo "::warning::force=true has no effect without no_sys_deps=true; the API rejects force on its own"
+        fi
+
+        echo "::group::Upload assets (package: ${PACKAGE_NAME})"
+
+        for file in "${DOWNLOAD_DIR}"/*; do
+          [ -f "${file}" ] || continue
+          file_name="$(basename "${file}")"
+
+          if [ "${file_name}" = "manifest.json" ]; then
+            continue
+          fi
+
+          echo "Uploading ${file_name}..."
+          if upload_file "${file}"; then
+            uploaded_count=$((uploaded_count + 1))
+            echo "${file_name}" >> "${uploaded_assets_file}"
+          else
+            failed_count=$((failed_count + 1))
+          fi
+        done
+
+        json_array=$(jq -R -s -c 'split("\n") | map(select(length > 0))' "${uploaded_assets_file}")
+        rm -f "${uploaded_assets_file}"
+
+        echo "::endgroup::"
+        echo "Summary: ${uploaded_count} uploaded, ${failed_count} failed"
+
+        echo "uploaded-count=${uploaded_count}" >> "${GITHUB_OUTPUT}"
+        echo "failed-count=${failed_count}" >> "${GITHUB_OUTPUT}"
+        echo "uploaded-assets=${json_array}" >> "${GITHUB_OUTPUT}"
+
+        if [ "${failed_count}" -gt 0 ]; then
+          echo "::error::${failed_count} asset(s) failed to upload"
+          exit 1
+        fi

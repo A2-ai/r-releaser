@@ -25,20 +25,24 @@ runs:
     - id: mask
       name: Mask sensitive inputs
       shell: bash
+      env:
+        AUTH_TOKEN: ${{ inputs.auth_token }}
       run: |
-        echo "::add-mask::${{ inputs.auth_token }}"
+        echo "::add-mask::${AUTH_TOKEN}"
 
     - id: create-edition
       name: Create edition
       shell: bash
+      env:
+        PRISM_API_URL: ${{ inputs.prism_api_url }}
+        AUTH_TOKEN: ${{ inputs.auth_token }}
+        PACKAGE_NAME: ${{ inputs.package_name }}
+        PACKAGE_VERSION: ${{ inputs.package_version }}
+        LATEST: ${{ inputs.latest }}
       run: |
         set -euo pipefail
 
-        PRISM_API_URL="${{ inputs.prism_api_url }}"
-        AUTH_TOKEN="${{ inputs.auth_token }}"
-        PACKAGE_NAME="${{ inputs.package_name }}"
-        PACKAGE_VERSION="${{ inputs.package_version }}"
-        LATEST="${{ inputs.latest }}"
+        RESPONSE_FILE=$(mktemp "${RUNNER_TEMP}/create-edition-response.XXXXXX")
 
         echo "::group::Create edition (package: ${PACKAGE_NAME}, version: ${PACKAGE_VERSION})"
 
@@ -46,7 +50,7 @@ runs:
         REGISTRY_ENDPOINT="${PRISM_API_URL}/registries/${PACKAGE_NAME}"
         echo "Checking if registry exists: ${REGISTRY_ENDPOINT}"
 
-        REGISTRY_CODE=$(curl -s -w "%{http_code}" -o /tmp/registry_response.json \
+        REGISTRY_CODE=$(curl -s -w "%{http_code}" -o "${RESPONSE_FILE}" \
           -X GET "${REGISTRY_ENDPOINT}" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${AUTH_TOKEN}")
@@ -55,7 +59,7 @@ runs:
           echo "Registry does not exist. Creating..."
           PAYLOAD=$(jq -n '{ "registry_type": "individual package" }')
 
-          CREATE_CODE=$(curl -s -w "%{http_code}" -o /tmp/registry_response.json \
+          CREATE_CODE=$(curl -s -w "%{http_code}" -o "${RESPONSE_FILE}" \
             -X POST "${REGISTRY_ENDPOINT}" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${AUTH_TOKEN}" \
@@ -65,7 +69,7 @@ runs:
             echo "Registry already exists (HTTP 409); continuing"
           elif [ "${CREATE_CODE}" -lt 200 ] || [ "${CREATE_CODE}" -ge 300 ]; then
             echo "::error::Failed to create registry (HTTP ${CREATE_CODE})"
-            cat /tmp/registry_response.json
+            cat "${RESPONSE_FILE}"
             exit 1
           else
             echo "Registry created (HTTP ${CREATE_CODE})"
@@ -74,7 +78,7 @@ runs:
           echo "Registry exists"
         else
           echo "::error::Failed to check registry (HTTP ${REGISTRY_CODE})"
-          cat /tmp/registry_response.json
+          cat "${RESPONSE_FILE}"
           exit 1
         fi
 
@@ -82,7 +86,7 @@ runs:
         EDITION_ENDPOINT="${PRISM_API_URL}/registries/${PACKAGE_NAME}/editions/${PACKAGE_VERSION}"
         echo "Checking if edition exists: ${EDITION_ENDPOINT}"
 
-        EDITION_CODE=$(curl -s -w "%{http_code}" -o /tmp/edition_response.json \
+        EDITION_CODE=$(curl -s -w "%{http_code}" -o "${RESPONSE_FILE}" \
           -X GET "${EDITION_ENDPOINT}" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${AUTH_TOKEN}")
@@ -93,7 +97,7 @@ runs:
           exit 0
         elif [ "${EDITION_CODE}" -ne 404 ]; then
           echo "::error::Failed to check edition (HTTP ${EDITION_CODE})"
-          cat /tmp/edition_response.json
+          cat "${RESPONSE_FILE}"
           exit 1
         fi
 
@@ -120,7 +124,7 @@ runs:
         echo "Payload:"
         echo "${PAYLOAD}" | jq .
 
-        CREATE_EDITION_CODE=$(curl -s -w "%{http_code}" -o /tmp/edition_response.json \
+        CREATE_EDITION_CODE=$(curl -s -w "%{http_code}" -o "${RESPONSE_FILE}" \
           -X POST "${EDITION_ENDPOINT}" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${AUTH_TOKEN}" \
@@ -128,7 +132,7 @@ runs:
 
         if [ "${CREATE_EDITION_CODE}" -lt 200 ] || [ "${CREATE_EDITION_CODE}" -ge 300 ]; then
           echo "::error::Failed to create edition (HTTP ${CREATE_EDITION_CODE})"
-          cat /tmp/edition_response.json
+          cat "${RESPONSE_FILE}"
           exit 1
         fi
         echo "Edition created successfully (HTTP ${CREATE_EDITION_CODE})"

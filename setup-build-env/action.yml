@@ -1,0 +1,30 @@
+name: 'Setup R package build environment'
+description: >-
+  Installs the compiled-language toolchain and system libraries an R package
+  build needs on linux. Driven by the build.toolchain and build.sysdeps
+  settings of a consumer's prism.yml (resolved to this action's inputs by the
+  release workflow's plan job). No-op on macOS and Windows.
+inputs:
+  toolchain:
+    description: >-
+      "auto" installs the distro's default compiler set (C, C++, Fortran,
+      make); "none" skips toolchain setup.
+    required: false
+    default: 'auto'
+  sysdeps:
+    description: >-
+      System libraries to install before the build: "auto" resolves them from
+      the dependency tree with `rv sysdeps` (Ubuntu/Debian only — a notice is
+      emitted elsewhere), "none" skips, or a space-separated list of distro
+      package names.
+    required: false
+    default: 'auto'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install toolchain and system dependencies
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        SYSDEPS: ${{ inputs.sysdeps }}
+      run: '"${GITHUB_ACTION_PATH}/setup-build-env.sh"'

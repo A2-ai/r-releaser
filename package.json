@@ -1,0 +1,32 @@
+{
+  "name": "r-releaser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Actions for building R packages and deploying them to PRISM",
+  "workspaces": [
+    "shared",
+    "build-src",
+    "build-bin",
+    "merge-manifests"
+  ],
+  "scripts": {
+    "bundle": "npm run bundle --workspaces --if-present",
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/A2-ai/r-releaser.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/A2-ai/r-releaser/issues"
+  },
+  "homepage": "https://github.com/A2-ai/r-releaser#readme",
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.3",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

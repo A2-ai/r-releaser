@@ -3,13 +3,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const os = require('node:os');
-
-const CODENAME_MAP = {
-    rhel: 'redhat',
-    alma: 'almalinux',
-};
+const { updateDescription } = require('../shared/description');
+const { validateManifest } = require('../shared/manifest-schema');
+const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
 
 const MANAGED_FIELDS = ['OS', 'Arch', 'LinkedTo'];
 
@@ -28,9 +26,11 @@ function mapOs(osField, osCodename) {
         throw new Error(`Invalid os_codename for linux binary: "${osCodename}"`);
     }
 
-    let name = match[1];
+    const name = LINUX_ID_MAP[match[1]];
     const version = match[2];
-    name = CODENAME_MAP[name] || name;
+    if (!name) {
+        throw new Error(`Unknown linux distro "${match[1]}" in os_codename "${osCodename}" — add it to shared/platforms.json`);
+    }
     return `${name} ${version}`;
 }
 
@@ -53,11 +53,21 @@ function getArchiveExtension(filename) {
     return null;
 }
 
+function run(cmd, args, opts = {}) {
+    const result = spawnSync(cmd, args, { stdio: 'pipe', encoding: 'utf8', ...opts });
+    if (result.error) {
+        throw new Error(`Failed to run ${cmd}: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+        throw new Error(`${cmd} ${args.join(' ')} exited with ${result.status}:\n${result.stderr}`);
+    }
+}
+
 function extractArchive(archivePath, destDir, ext) {
     if (ext === '.tar.gz' || ext === '.tgz') {
-        execSync(`tar xf "${archivePath}" -C "${destDir}"`, { stdio: 'pipe' });
+        run('tar', ['xf', archivePath, '-C', destDir]);
     } else if (ext === '.zip') {
-        execSync(`unzip -q -o "${archivePath}" -d "${destDir}"`, { stdio: 'pipe' });
+        run('unzip', ['-q', '-o', archivePath, '-d', destDir]);
     }
 }
 
@@ -65,11 +75,9 @@ function repackArchive(archivePath, sourceDir, ext) {
     // Get the top-level entries to pack
     const entries = fs.readdirSync(sourceDir);
     if (ext === '.tar.gz' || ext === '.tgz') {
-        const args = entries.map(e => `"${e}"`).join(' ');
-        execSync(`tar czf "${archivePath}" ${args}`, { cwd: sourceDir, stdio: 'pipe' });
+        run('tar', ['czf', archivePath, ...entries], { cwd: sourceDir });
     } else if (ext === '.zip') {
-        const args = entries.map(e => `"${e}"`).join(' ');
-        execSync(`zip -qr "${archivePath}" ${args}`, { cwd: sourceDir, stdio: 'pipe' });
+        run('zip', ['-qr', archivePath, ...entries], { cwd: sourceDir });
     }
 }
 
@@ -87,38 +95,19 @@ function findDescription(extractDir, pkgName) {
 }
 
 function buildDescriptionFields(entry) {
-    const fields = [];
+    const fields = {};
 
     if (entry.os) {
-        fields.push(`OS: ${mapOs(entry.os, entry.os_codename || entry.os)}`);
+        fields['OS'] = mapOs(entry.os, entry.os_codename || entry.os);
     }
     if (entry.arch) {
-        fields.push(`Arch: ${mapArch(entry.arch)}`);
+        fields['Arch'] = mapArch(entry.arch);
     }
     if (entry.linked_to && typeof entry.linked_to === 'object' && Object.keys(entry.linked_to).length > 0) {
-        fields.push(`LinkedTo: ${formatLinkedTo(entry.linked_to)}`);
+        fields['LinkedTo'] = formatLinkedTo(entry.linked_to);
     }
 
     return fields;
-}
-
-function stripManagedFields(content) {
-    // Remove any existing OS/Arch/LinkedTo fields including continuation lines
-    // (DESCRIPTION format: continuation lines start with whitespace)
-    const lines = content.split('\n');
-    const filtered = [];
-    let skipping = false;
-    for (const line of lines) {
-        const fieldMatch = line.match(/^([A-Za-z]+):/);
-        if (fieldMatch) {
-            skipping = MANAGED_FIELDS.includes(fieldMatch[1]);
-        } else if (!/^\s/.test(line)) {
-            // Non-field, non-continuation line (e.g. blank line) — stop skipping
-            skipping = false;
-        }
-        if (!skipping) filtered.push(line);
-    }
-    return filtered.join('\n');
 }
 
 function processEntry(downloadDir, filename, entry) {
@@ -133,7 +122,7 @@ function processEntry(downloadDir, filename, entry) {
     }
 
     const fields = buildDescriptionFields(entry);
-    if (fields.length === 0) {
+    if (Object.keys(fields).length === 0) {
         throw new Error(`${filename}: binary entry produced no DESCRIPTION fields — check manifest data`);
     }
 
@@ -148,18 +137,15 @@ function processEntry(downloadDir, filename, entry) {
             throw new Error(`${filename}: no DESCRIPTION found in archive`);
         }
 
-        let content = fs.readFileSync(descPath, 'utf8');
-        content = stripManagedFields(content);
-        // Ensure trailing newline before appending
-        if (!content.endsWith('\n')) content += '\n';
-        content += fields.join('\n') + '\n';
-        fs.writeFileSync(descPath, content, 'utf8');
+        const content = fs.readFileSync(descPath, 'utf8');
+        const remove = MANAGED_FIELDS.filter(name => !(name in fields));
+        fs.writeFileSync(descPath, updateDescription(content, { set: fields, remove }), 'utf8');
 
         // Re-archive, replacing the original
         fs.unlinkSync(archivePath);
         repackArchive(archivePath, tmpDir, ext);
 
-        console.log(`  Modified ${filename}: set ${fields.map(f => f.split(':')[0]).join(', ')}`);
+        console.log(`  Modified ${filename}: set ${Object.keys(fields).join(', ')}`);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -207,6 +193,11 @@ function main() {
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const problems = validateManifest(manifest);
+    if (problems.length > 0) {
+        console.error(`manifest.json is invalid:\n${problems.join('\n')}`);
+        process.exit(1);
+    }
     const entries = Object.entries(manifest);
     console.log(`Processing ${entries.length} manifest entries...`);
 
@@ -236,4 +227,8 @@ function main() {
     }
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+module.exports = { mapOs, mapArch, formatLinkedTo, buildDescriptionFields, parseSkipRules, matchSkipRule };

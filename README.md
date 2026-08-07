@@ -12,7 +12,7 @@ build-src ──► build-bin (once per platform) ──► merge-manifests ─�
 
 ### setup-build-env
 
-Prepares a linux build environment before `rv sync` runs: installs the
+Prepares the build environment before `rv sync` runs: installs the
 distro's compiler toolchain (`toolchain: auto`, or `none` to skip) and system
 libraries (`sysdeps: auto` resolves them with `rv sysdeps`; `none` skips; a
 space-separated package list installs exactly those). With `auto`,
@@ -26,7 +26,10 @@ mirror and CRB is enabled only if the system defines it. An empty `auto` result 
 ambiguous and annotated as such: either nothing is required, or the platform
 is unsupported by `rv sysdeps` (almalinux10 and native Rocky are known
 unsupported). Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when
-not root. No-op on macOS and Windows.
+not root. The distro toolchain and system libraries are linux-only; with
+`toolchain: auto`, sources that need Rust also get rustup (stable toolchain,
+minimal profile) on linux and macOS, plus xz when `src/rust/vendor.tar.xz` is
+present. No-op on Windows.
 
 ### build-src
 

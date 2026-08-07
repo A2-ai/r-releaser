@@ -3,8 +3,12 @@
 # Inputs via env: TOOLCHAIN (auto|none), SYSDEPS (auto|none|space-separated
 # distro package names), SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated,
 # auto mode only), PLATFORM (optional resolved platform as <id><major>, e.g.
-# almalinux8; empty detects from /etc/os-release). Runs as-is in containers
-# (root) and on bare-metal runners (non-root with passwordless sudo).
+# almalinux8; empty detects from /etc/os-release). The distro compiler set and
+# system libraries are linux-only; when the source needs Rust, the toolchain
+# (rustup, stable, minimal profile) installs on linux and macOS, plus xz when
+# a vendored crate archive is present. No-op on Windows. Runs as-is in
+# containers (root) and on bare-metal runners (non-root with passwordless
+# sudo).
 set -euo pipefail
 
 TOOLCHAIN="${TOOLCHAIN:-auto}"
@@ -14,8 +18,90 @@ SYSDEPS_EXTRA="${SYSDEPS_EXTRA:-}"
 PLATFORM="${PLATFORM:-}"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 
-if [ "$(uname -s)" != "Linux" ]; then
-    echo "::notice::setup-build-env: toolchain/sysdeps management only applies to linux; nothing to do on $(uname -s)"
+case "$TOOLCHAIN" in
+    auto|none) ;;
+    *)
+        echo "::error::setup-build-env: unknown toolchain value \"$TOOLCHAIN\" (expected auto or none)"
+        exit 1
+        ;;
+esac
+
+KERNEL="$(uname -s)"
+if [ "$KERNEL" != "Linux" ] && [ "$KERNEL" != "Darwin" ]; then
+    echo "::notice::setup-build-env: toolchain management only applies to linux and macOS; nothing to do on $KERNEL"
+    exit 0
+fi
+
+needs_rust() {
+    if [ -f src/rust/Cargo.toml ]; then
+        echo "setup-build-env: Rust sources detected (src/rust/Cargo.toml)"
+        return 0
+    fi
+    local cargo_toml=""
+    if [ -d src ]; then
+        cargo_toml="$(find src -name Cargo.toml -print -quit)"
+    fi
+    if [ -n "$cargo_toml" ]; then
+        echo "setup-build-env: Rust sources detected ($cargo_toml)"
+        return 0
+    fi
+    local mk
+    for mk in src/Makevars src/Makevars.in src/Makevars.win.in; do
+        if [ -f "$mk" ] && grep -q cargo "$mk"; then
+            echo "setup-build-env: Rust sources detected ($mk mentions cargo)"
+            return 0
+        fi
+    done
+    return 1
+}
+
+setup_rust() {
+    if ! needs_rust; then
+        return 0
+    fi
+    if [ "$TOOLCHAIN" = "none" ]; then
+        echo "::notice::setup-build-env: Rust sources detected but toolchain=none — skipping Rust toolchain install"
+        return 0
+    fi
+    if command -v cargo >/dev/null 2>&1; then
+        echo "setup-build-env: cargo already on PATH, skipping Rust toolchain install"
+        return 0
+    fi
+    if [ "$KERNEL" = "Linux" ] && ! command -v curl >/dev/null 2>&1; then
+        install_pkgs curl
+    fi
+    echo "setup-build-env: installing the Rust toolchain (stable, minimal profile)"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+    # Empty/unset GITHUB_PATH means a local run; the export covers this script.
+    if [ -n "${GITHUB_PATH:-}" ]; then
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+}
+
+# Independent of needs_rust and the cargo-present skip: a vendored build needs
+# xz even when the rustup install was skipped.
+setup_vendor_xz() {
+    if [ "$TOOLCHAIN" != "auto" ] || [ ! -f src/rust/vendor.tar.xz ]; then
+        return 0
+    fi
+    if command -v xz >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ "$KERNEL" = "Linux" ]; then
+        case "$PM" in
+            apt-get) install_pkgs xz-utils ;;
+            *)       install_pkgs xz ;;
+        esac
+    else
+        echo "::warning::setup-build-env: src/rust/vendor.tar.xz present but xz is not on PATH — the vendored crate unpack will fail"
+    fi
+}
+
+if [ "$KERNEL" = "Darwin" ]; then
+    setup_rust
+    setup_vendor_xz
+    echo "::notice::setup-build-env: package-manager toolchain/sysdeps only apply to linux; skipping on Darwin"
     exit 0
 fi
 
@@ -162,11 +248,10 @@ case "$TOOLCHAIN" in
             *)       install_pkgs gcc gcc-c++ gcc-gfortran make ;;
         esac
         ;;
-    *)
-        echo "::error::setup-build-env: unknown toolchain value \"$TOOLCHAIN\" (expected auto or none)"
-        exit 1
-        ;;
 esac
+
+setup_rust
+setup_vendor_xz
 
 if [ "$SYSDEPS" != "auto" ] && { [ -n "$SYSDEPS_IGNORE" ] || [ -n "$SYSDEPS_EXTRA" ]; }; then
     echo "::warning::setup-build-env: sysdeps_ignore/sysdeps_extra only apply with sysdeps=auto — ignoring them"

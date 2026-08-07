@@ -1,14 +1,19 @@
 name: 'Setup R package build environment'
 description: >-
   Installs the compiled-language toolchain and system libraries an R package
-  build needs on linux. Driven by the build.toolchain and build.sysdeps
-  settings of a consumer's prism.yml (resolved to this action's inputs by the
-  release workflow's plan job). No-op on macOS and Windows.
+  build needs. When the source needs Rust, installs rustup (stable toolchain,
+  minimal profile) on linux and macOS, plus xz when src/rust/vendor.tar.xz is
+  present; the distro compiler set and system libraries remain linux-only.
+  Driven by the build.toolchain and build.sysdeps settings of a consumer's
+  prism.yml (resolved to this action's inputs by the release workflow's plan
+  job). No-op on Windows.
 inputs:
   toolchain:
     description: >-
-      "auto" installs the distro's default compiler set (C, C++, Fortran,
-      make); "none" skips toolchain setup.
+      "auto" installs what the source needs — the distro's default compiler
+      set (C, C++, Fortran, make) on linux, the Rust toolchain when Rust
+      sources are detected and cargo is absent, and xz for vendored crate
+      archives; "none" skips all toolchain setup.
     required: false
     default: 'auto'
   sysdeps:

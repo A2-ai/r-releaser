@@ -27999,7 +27999,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"J":["libc.so.6","libm.so.6","libdl.s
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"comment":"Single source of truth mapping /etc/os-release IDs (as embedded in binary platform tags, e.g. linux_alma8) to the OS names PRISM expects. build-bin validates against this at build time and deploy-prism maps with it at deploy time, so a distro that builds cannot fail at deploy.","linux_id_map":{"ubuntu":"ubuntu","debian":"debian","rhel":"redhat","alma":"almalinux","almalinux":"almalinux","rocky":"rocky","centos":"centos","fedora":"fedora","amzn":"amazon","sles":"sles"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"comment":"Single source of truth mapping /etc/os-release IDs (as embedded in binary platform tags, e.g. linux_alma8) to the OS names PRISM expects. build-bin validates against this at build time and deploy-prism maps with it at deploy time, so a distro that builds cannot fail at deploy. codename_aliases overrides the ID map for whole codenames: the PRISM API does not currently support alma 9, so those binaries are sent as redhat 9 — provenance in the manifest is unaffected; delete the entries when PRISM adds alma 9.","codename_aliases":{"alma9":"redhat 9","almalinux9":"redhat 9"},"linux_id_map":{"ubuntu":"ubuntu","debian":"debian","rhel":"redhat","alma":"almalinux","almalinux":"almalinux","rocky":"rocky","centos":"centos","fedora":"fedora","amzn":"amazon","sles":"sles"}}');
 
 /***/ })
 

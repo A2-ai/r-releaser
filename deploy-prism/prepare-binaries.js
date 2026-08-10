@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const { updateDescription } = require('../shared/description');
 const { validateManifest } = require('../shared/manifest-schema');
-const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
+const { linux_id_map: LINUX_ID_MAP, codename_aliases: CODENAME_ALIASES } = require('../shared/platforms.json');
 
 const MANAGED_FIELDS = ['OS', 'Arch', 'LinkedTo'];
 
@@ -17,6 +17,10 @@ function mapOs(osField, osCodename) {
 
     if (osField !== 'linux') {
         throw new Error(`Unknown os value: "${osField}"`);
+    }
+
+    if (CODENAME_ALIASES[osCodename]) {
+        return CODENAME_ALIASES[osCodename];
     }
 
     // Linux: split codename into name + version number

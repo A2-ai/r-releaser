@@ -36,7 +36,8 @@ inputs:
       If true, declare this package's linux binaries portable across distros and send
       ?no_sys_deps=true on their POST. Applied only to linux binary uploads whose
       manifest entry records no_sys_deps=true from build-bin's portability verifier
-      (docs/portability-contract.md); a manifest recording false or lacking the field
+      (https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md);
+      a manifest recording false or lacking the field
       warns and uploads unflagged. Source and non-linux binaries are never flagged.
     required: false
     default: 'false'
@@ -190,7 +191,7 @@ runs:
                   echo "::warning::${file_name}: no_sys_deps input is true but the manifest has no no_sys_deps field (built by an older build-bin, or verification could not run at build time) — not sending the flag. Rebuild with a current build-bin, passing no_sys_deps so an unverifiable claim fails there with the reason."
                   ;;
                 *)
-                  echo "::warning::${file_name}: no_sys_deps input is true but build-time verification recorded no_sys_deps=false — not sending the flag. The binary links system libraries; see r-releaser docs/portability-contract.md."
+                  echo "::warning::${file_name}: no_sys_deps input is true but build-time verification recorded no_sys_deps=false — not sending the flag. The binary links system libraries; see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md."
                   ;;
               esac
             fi

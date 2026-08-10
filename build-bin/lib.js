@@ -232,7 +232,7 @@ function applyPortabilityPolicy({ claimed, platform, platformTag, pkgName, verif
         const details = result.violations
             .map(v => `${v.so}: ${v.libs.join(', ')}`)
             .join('; ');
-        throw Error(`no_sys_deps was claimed but ${pkgName} links system libraries — ${details} (see docs/portability-contract.md)`);
+        throw Error(`no_sys_deps was claimed but ${pkgName} links system libraries — ${details} (see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md)`);
     }
 
     const fields = { no_sys_deps: result.noSysDeps };
@@ -242,7 +242,7 @@ function applyPortabilityPolicy({ claimed, platform, platformTag, pkgName, verif
     const notice = result.noSysDeps
         ? (claimed
             ? `no_sys_deps verified for ${pkgName}${result.glibcMax ? ` (glibc_max ${result.glibcMax})` : ''}`
-            : `${pkgName} links only portable runtime libraries — eligible for no_sys_deps (see docs/portability-contract.md)`)
+            : `${pkgName} links only portable runtime libraries — eligible for no_sys_deps (see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md)`)
         : null;
     return { fields, warning: null, notice };
 }

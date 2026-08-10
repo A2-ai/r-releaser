@@ -39,11 +39,12 @@ static read executes nothing.
 | --- | --- | --- |
 | glibc family | `libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `librt.so.1`, `libresolv.so.2`, `libutil.so.1`, `ld-linux-*.so.*` (any architecture) | **Allowed.** Portability within the family is governed by the glibc floor PRISM already models from build provenance. |
 | GCC unwind runtime | `libgcc_s.so.1` | **Allowed.** Stable ABI, present wherever glibc is. |
+| C++ runtime | `libstdc++.so.6` | **Allowed.** Under a stated assumption, not enforcement — see below. |
 | R family | `libR.so`, `libRblas.so`, `libRlapack.so` | **Allowed.** Supplied by the R installation the binary targets. |
-| Compiler runtimes | `libstdc++.so.6`, `libgfortran.so.*`, `libgomp.so.*` | **System dependencies — violation.** See below. |
-| Everything else | `libcurl.so.4`, `libxml2.so.2`, `libssl.so.*`, … | **System dependencies — violation.** |
+| Fortran/OpenMP runtimes | `libgfortran.so.*`, `libgomp.so.*` | **System dependencies — violation.** See below. |
+| Everything else | `libcurl.so.4`, `libxml2.so.2`, `libssl.so.*`, `libgit2.so.*`, … | **System dependencies — violation.** |
 
-### Why the compiler runtimes are excluded
+### The compiler runtimes: what is excluded, and what is assumed
 
 SONAME presence proves nothing about symbol-version floors. A binary built on alma9
 links `libstdc++.so.6` exactly as one built on alma8 does, while requiring a
@@ -51,14 +52,20 @@ links `libstdc++.so.6` exactly as one built on alma8 does, while requiring a
 crossing distros: build on alma8 with `gcc-toolset-13` and the object requires
 `GLIBCXX_3.4.32`, which alma8's own system `libstdc++.so.6` does not provide. Nothing
 currently models per-distro capabilities for `GLIBCXX_` / `CXXABI_` / `GFORTRAN_` /
-`GOMP_`+`OMP_` the way PRISM models the glibc floor, so treating these libraries as
-system dependencies is the only answer that cannot be wrong in the dangerous
-direction.
+`GOMP_`+`OMP_` the way PRISM models the glibc floor, so `libgfortran` and `libgomp`
+are treated as system dependencies — the only answer that cannot be wrong in the
+dangerous direction.
 
-The cost is accepted knowingly: every Rcpp-based package links `libstdc++.so.6`, so
-most compiled packages are ineligible for `no_sys_deps` until a generated per-distro
-capability table exists to check symbol-version requirements against (the planned
-follow-on).
+`libstdc++.so.6` is admitted anyway, as an accepted risk resting on an assumption the
+verifier does not check: builds use the distro-default compiler, and on the supported
+platforms the default compiler's `GLIBCXX_` requirements track the glibc floor PRISM
+already enforces from build provenance. Nothing records a `GLIBCXX_` floor —
+`glibc_max` covers glibc only — so a build that steps outside the assumption (a
+`gcc-toolset` compiler, as above) produces a false portability claim the mechanism
+cannot detect. The trade accepted here is coverage: Rcpp-based packages, which all
+link `libstdc++.so.6`, become claimable as portable. Fortran and OpenMP packages
+remain ineligible until a generated per-distro capability table exists to check
+symbol-version requirements against (the planned follow-on).
 
 ## Rules
 

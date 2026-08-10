@@ -82,7 +82,7 @@ describe('isPortableRuntimeLib', () => {
 
     it('rejects compiler runtimes and system libraries', () => {
         for (const lib of [
-            'libstdc++.so.6', 'libgfortran.so.5', 'libgomp.so.1',
+            'libgfortran.so.5', 'libgomp.so.1',
             'libcurl.so.4', 'libxml2.so.2', 'libssl.so.3',
         ]) {
             expect(isPortableRuntimeLib(lib), lib).toBe(false);
@@ -191,23 +191,40 @@ describe('verifyPortability', () => {
     it('reports violations from every object, not just the first', () => {
         makeSoFiles('libs/a.so', 'libs/b.so');
         const outputs = {
-            'a.so': readelfOutput(['libstdc++.so.6', 'libc.so.6']),
-            'b.so': readelfOutput(['libcurl.so.4', 'libgomp.so.1']),
+            'a.so': readelfOutput(['libxml2.so.2', 'libc.so.6']),
+            'b.so': readelfOutput(['libxml2.so.2', 'libgomp.so.1']),
         };
         const result = verifyPortability(libDir, 'pkg', soPath => outputs[path.basename(soPath)]);
         expect(result.noSysDeps).toBe(false);
         expect(result.violations).toEqual([
-            { so: path.join('libs', 'a.so'), libs: ['libstdc++.so.6'] },
-            { so: path.join('libs', 'b.so'), libs: ['libcurl.so.4', 'libgomp.so.1'] },
+            { so: path.join('libs', 'a.so'), libs: ['libxml2.so.2'] },
+            { so: path.join('libs', 'b.so'), libs: ['libxml2.so.2', 'libgomp.so.1'] },
         ]);
     });
 
     it('finds shared objects in arch subdirectories', () => {
         makeSoFiles('libs/x64/pkg.so');
-        const result = verifyPortability(libDir, 'pkg', () => readelfOutput(['libcurl.so.4']));
+        const result = verifyPortability(libDir, 'pkg', () => readelfOutput(['libxml2.so.2']));
         expect(result.noSysDeps).toBe(false);
         expect(result.violations).toEqual([
-            { so: path.join('libs', 'x64', 'pkg.so'), libs: ['libcurl.so.4'] },
+            { so: path.join('libs', 'x64', 'pkg.so'), libs: ['libxml2.so.2'] },
+        ]);
+    });
+
+    it('allows libstdc++ under the distro-default-compiler assumption', () => {
+        makeSoFiles('libs/pkg.so');
+        const output = readelfOutput(['libc.so.6', 'libstdc++.so.6'], ['GLIBC_2.28']);
+        const result = verifyPortability(libDir, 'pkg', () => output);
+        expect(result).toEqual({ noSysDeps: true, violations: [], glibcMax: '2.28' });
+    });
+
+    it('rejects libcurl as a system dependency', () => {
+        makeSoFiles('libs/pkg.so');
+        const output = readelfOutput(['libc.so.6', 'libcurl.so.4'], ['GLIBC_2.28']);
+        const result = verifyPortability(libDir, 'pkg', () => output);
+        expect(result.noSysDeps).toBe(false);
+        expect(result.violations).toEqual([
+            { so: path.join('libs', 'pkg.so'), libs: ['libcurl.so.4'] },
         ]);
     });
 
@@ -224,12 +241,12 @@ describe('verifyPortability', () => {
         makeSoFiles('libs/pkg.so', 'lib/libtbb.so.12.1');
         const outputs = {
             'pkg.so': readelfOutput(['libc.so.6']),
-            'libtbb.so.12.1': readelfOutput(['libstdc++.so.6']),
+            'libtbb.so.12.1': readelfOutput(['libgfortran.so.5']),
         };
         const result = verifyPortability(libDir, 'pkg', soPath => outputs[path.basename(soPath)]);
         expect(result.noSysDeps).toBe(false);
         expect(result.violations).toEqual([
-            { so: path.join('lib', 'libtbb.so.12.1'), libs: ['libstdc++.so.6'] },
+            { so: path.join('lib', 'libtbb.so.12.1'), libs: ['libgfortran.so.5'] },
         ]);
     });
 
@@ -269,7 +286,7 @@ describe('applyPortabilityPolicy', () => {
     const clean = { noSysDeps: true, violations: [], glibcMax: '2.28' };
     const dirty = {
         noSysDeps: false,
-        violations: [{ so: 'pkg.so', libs: ['libstdc++.so.6', 'libcurl.so.4'] }],
+        violations: [{ so: 'pkg.so', libs: ['libcurl.so.4', 'libxml2.so.2'] }],
         glibcMax: '2.17',
     };
 
@@ -307,7 +324,7 @@ describe('applyPortabilityPolicy', () => {
 
     it('fails a claim on violations, naming every object and library', () => {
         expect(() => applyPortabilityPolicy({ ...linux, claimed: true, verify: () => dirty }))
-            .toThrow('pkg.so: libstdc++.so.6, libcurl.so.4');
+            .toThrow('pkg.so: libcurl.so.4, libxml2.so.2');
     });
 
     it('records violations silently when unclaimed', () => {

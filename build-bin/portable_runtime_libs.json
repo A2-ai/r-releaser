@@ -1,5 +1,5 @@
 {
-  "comment": "Single source of truth for the portable-runtime allowlist in docs/portability-contract.md: the only SONAMEs a no_sys_deps binary may link, besides the ld-linux-* loaders matched by regex in lib.js. libstdc++/libgfortran/libgomp are deliberately absent — SONAME presence proves nothing about their symbol-version floors (GLIBCXX_ etc.), so they count as system dependencies.",
+  "comment": "Single source of truth for the portable-runtime allowlist in docs/portability-contract.md: the only SONAMEs a no_sys_deps binary may link, besides the ld-linux-* loaders matched by regex in lib.js. libgfortran/libgomp are deliberately absent — SONAME presence proves nothing about their symbol-version floors (GFORTRAN_/GOMP_/OMP_), so they count as system dependencies. libstdc++.so.6 is allowed under a stated assumption, not enforcement: builds use the distro-default compiler, where GLIBCXX_ capability tracks the glibc floor PRISM already enforces; nothing records a GLIBCXX_ floor, so a gcc-toolset build breaks the assumption undetected. libcurl.so.4 is deliberately absent — it is a system dependency like any other library the distro's package manager provides.",
   "sonames": [
     "libc.so.6",
     "libm.so.6",
@@ -9,6 +9,7 @@
     "libresolv.so.2",
     "libutil.so.1",
     "libgcc_s.so.1",
+    "libstdc++.so.6",
     "libR.so",
     "libRblas.so",
     "libRlapack.so"

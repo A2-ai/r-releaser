@@ -27991,7 +27991,7 @@ module.exports = /*#__PURE__*/JSON.parse('["base","compiler","datasets","graphic
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"J":["libc.so.6","libm.so.6","libdl.so.2","libpthread.so.0","librt.so.1","libresolv.so.2","libutil.so.1","libgcc_s.so.1","libR.so","libRblas.so","libRlapack.so"]}');
+module.exports = /*#__PURE__*/JSON.parse('{"J":["libc.so.6","libm.so.6","libdl.so.2","libpthread.so.0","librt.so.1","libresolv.so.2","libutil.so.1","libgcc_s.so.1","libstdc++.so.6","libR.so","libRblas.so","libRlapack.so"]}');
 
 /***/ }),
 

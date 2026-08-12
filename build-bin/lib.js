@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const path = require('path');
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 const { parseDescriptionFile } = require('../shared/manifest');
+const { parseDescription } = require('../shared/description');
 const builtinPackages = require('./builtin_packages.json');
 const { linux_id_map: LINUX_ID_MAP } = require('../shared/platforms.json');
 
@@ -29,6 +30,25 @@ function renameBinaryArchive(pkgName, pkgVersion, platformTag, archTag, rVersion
     const newName = `${pkgName}_${pkgVersion}_${platformTag}_${archTag}_${rVersion}${ext}`;
     fs.renameSync(tarballName, newName);
     return newName;
+}
+
+// The tarball's own DESCRIPTION is the authority for name/version: R CMD
+// INSTALL installs under the DESCRIPTION Package name regardless of what the
+// tarball file is called, so filename-derived names break on renamed tarballs.
+function readTarballDescription(srcTarballPath) {
+    // Node's default 1 MiB maxBuffer overflows on listings of large packages.
+    const tarOpts = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+    const entries = execFileSync('tar', ['-tzf', srcTarballPath], tarOpts).split('\n');
+    const descEntry = entries.map(e => e.trim()).find(e => /^(\.\/)?[^/]+\/DESCRIPTION$/.test(e));
+    if (!descEntry) {
+        throw Error(`No top-level DESCRIPTION found in ${srcTarballPath}`);
+    }
+    const content = execFileSync('tar', ['-xzOf', srcTarballPath, descEntry], tarOpts);
+    const desc = parseDescription(content);
+    if (!desc['Package'] || !desc['Version']) {
+        throw Error(`DESCRIPTION in ${srcTarballPath} lacks Package or Version`);
+    }
+    return { pkgName: desc['Package'], pkgVersion: desc['Version'] };
 }
 
 function parseOsRelease() {
@@ -114,6 +134,119 @@ function resolveLinkedTo(linkingToDeps, libraryPath, includeBuiltinLinkingToDeps
     return linkedTo;
 }
 
+const PORTABLE_RUNTIME_LIBS = new Set(require('./portable_runtime_libs.json').sonames);
+const LD_LINUX_RE = /^ld-linux-[^/]*\.so(\.\d+)?$/;
+
+function isPortableRuntimeLib(soname) {
+    return PORTABLE_RUNTIME_LIBS.has(soname) || LD_LINUX_RE.test(soname);
+}
+
+function parseNeededLibs(readelfOutput) {
+    return [...readelfOutput.matchAll(/\(NEEDED\)\s+Shared library:\s+\[([^\]]+)\]/g)]
+        .map(match => match[1]);
+}
+
+function parseGlibcVersions(readelfOutput) {
+    return [...readelfOutput.matchAll(/\bGLIBC_(\d+\.\d+(?:\.\d+)?)\b/g)]
+        .map(match => match[1]);
+}
+
+function compareVersions(a, b) {
+    const as = a.split('.').map(Number);
+    const bs = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(as.length, bs.length); i++) {
+        const diff = (as[i] || 0) - (bs[i] || 0);
+        if (diff !== 0) return diff;
+    }
+    return 0;
+}
+
+function execReadelf(soPath) {
+    // LC_ALL=C: the parsers below match readelf's English output.
+    return execFileSync('readelf', ['-dV', soPath], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: { ...process.env, LC_ALL: 'C' },
+    });
+}
+
+const SO_FILE_RE = /\.so(\.\d+)*$/;
+
+// Static DT_NEEDED read of every shared object in the installed package;
+// throws when verification cannot run (readelf missing/erroring, no dynamic
+// section). Walks the whole install tree, not just libs/: packages ship
+// versioned objects via inst/ (e.g. lib/libtbb.so.2, jri/libjri.so), and a
+// missed object would let a false no_sys_deps claim through.
+function verifyPortability(libraryPath, pkgName, runReadelf = execReadelf) {
+    const pkgDir = path.join(libraryPath, pkgName);
+    if (!fs.existsSync(pkgDir)) {
+        throw Error(`Installed package not found at ${pkgDir} — cannot verify portability`);
+    }
+    const soFiles = fs.readdirSync(pkgDir, { recursive: true })
+        .map(String)
+        .filter(f => SO_FILE_RE.test(f) && fs.statSync(path.join(pkgDir, f)).isFile());
+
+    const violations = [];
+    let glibcMax = null;
+    for (const so of soFiles) {
+        const output = runReadelf(path.join(pkgDir, so));
+        if (!output.includes('Dynamic section')) {
+            throw Error(`readelf output for ${so} contains no dynamic section`);
+        }
+        const offending = parseNeededLibs(output).filter(lib => !isPortableRuntimeLib(lib));
+        if (offending.length > 0) {
+            violations.push({ so, libs: offending });
+        }
+        for (const version of parseGlibcVersions(output)) {
+            if (glibcMax === null || compareVersions(version, glibcMax) > 0) {
+                glibcMax = version;
+            }
+        }
+    }
+    return { noSysDeps: violations.length === 0, violations, glibcMax };
+}
+
+// Turns the claim plus a verification attempt into manifest fields and
+// messages, per the outcome table in docs/portability-contract.md. Throws
+// exactly when the claim must fail the build.
+function applyPortabilityPolicy({ claimed, platform, platformTag, pkgName, verify }) {
+    if (platform !== 'linux') {
+        return {
+            fields: {},
+            warning: claimed ? `no_sys_deps applies only to linux binaries; ignoring for ${platformTag}` : null,
+            notice: null,
+        };
+    }
+
+    let result;
+    try {
+        result = verify();
+    } catch (err) {
+        if (claimed) {
+            throw Error(`no_sys_deps was claimed but could not be verified: ${err.message}`);
+        }
+        return { fields: {}, warning: `portability verification could not run: ${err.message}`, notice: null };
+    }
+
+    if (!result.noSysDeps && claimed) {
+        const details = result.violations
+            .map(v => `${v.so}: ${v.libs.join(', ')}`)
+            .join('; ');
+        throw Error(`no_sys_deps was claimed but ${pkgName} links system libraries — ${details} (see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md)`);
+    }
+
+    const fields = { no_sys_deps: result.noSysDeps };
+    if (result.glibcMax !== null) {
+        fields.glibc_max = result.glibcMax;
+    }
+    const notice = result.noSysDeps
+        ? (claimed
+            ? `no_sys_deps verified for ${pkgName}${result.glibcMax ? ` (glibc_max ${result.glibcMax})` : ''}`
+            : `${pkgName} links only portable runtime libraries — eligible for no_sys_deps (see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md)`)
+        : null;
+    return { fields, warning: null, notice };
+}
+
 function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
     const originalCwd = process.cwd();
     const libraryPath = path.resolve(originalCwd, libraryDir);
@@ -162,6 +295,7 @@ function buildPackageBinary(libraryDir, srcTarballPath, pkgName, pkgVersion) {
 
 module.exports = {
     getExtension,
+    readTarballDescription,
     renameBinaryArchive,
     parseOsRelease,
     getPlatformTag,
@@ -169,5 +303,11 @@ module.exports = {
     getBuildTagParts,
     decomposePlatformTag,
     resolveLinkedTo,
+    isPortableRuntimeLib,
+    parseNeededLibs,
+    parseGlibcVersions,
+    compareVersions,
+    verifyPortability,
+    applyPortabilityPolicy,
     buildPackageBinary,
 };

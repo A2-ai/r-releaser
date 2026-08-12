@@ -1,7 +1,7 @@
 const core = require('@actions/core');
 const path = require('path');
 const { updateManifest } = require('../shared/manifest');
-const { decomposePlatformTag, resolveLinkedTo, buildPackageBinary } = require('./lib');
+const { decomposePlatformTag, resolveLinkedTo, buildPackageBinary, verifyPortability, applyPortabilityPolicy, readTarballDescription } = require('./lib');
 
 // For now we assume the current directory is where the DESCRIPTION file is located
 // TO reapproach description modding later
@@ -12,11 +12,7 @@ try {
     console.log("Library:", libraryPath);
     console.log("Src tarball path:", srcTarballPath);
 
-    // Extract package name/version from source tarball filename
-    const srcTarballName = path.basename(srcTarballPath);
-    const srcMatch = srcTarballName.match(/^(.+?)_(.+?)\.tar\.gz$/);
-    const pkgName = srcMatch ? srcMatch[1] : srcTarballName;
-    const pkgVersion = srcMatch ? srcMatch[2] : 'unknown';
+    const { pkgName, pkgVersion } = readTarballDescription(srcTarballPath);
 
     const { filename, platformTag, archTag, rVersion } = buildPackageBinary(libraryPath, srcTarballPath, pkgName, pkgVersion);
     core.setOutput("binary_path", path.resolve(".", filename));
@@ -31,6 +27,16 @@ try {
 
     const { os, os_codename } = decomposePlatformTag(platformTag);
 
+    const { fields: portabilityFields, warning, notice } = applyPortabilityPolicy({
+        claimed: core.getInput('no_sys_deps') === 'true',
+        platform: process.platform,
+        platformTag,
+        pkgName,
+        verify: () => verifyPortability(path.resolve(libraryPath), pkgName),
+    });
+    if (warning) core.warning(warning);
+    if (notice) core.notice(notice);
+
     const manifest = {
         [filename]: {
             package: pkgName,
@@ -41,6 +47,7 @@ try {
             arch: archTag,
             r_version: rVersion,
             linked_to: linkedTo,
+            ...portabilityFields,
         },
     };
     updateManifest(manifestPath, manifest);

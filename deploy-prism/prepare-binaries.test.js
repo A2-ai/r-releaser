@@ -14,6 +14,11 @@ describe('mapOs', () => {
         expect(mapOs('windows', 'windows')).toBe('windows');
     });
 
+    it('aliases alma 9 to redhat 9 while the PRISM API lacks alma 9 support', () => {
+        expect(mapOs('linux', 'alma9')).toBe('redhat 9');
+        expect(mapOs('linux', 'almalinux9')).toBe('redhat 9');
+    });
+
     it('points at shared/platforms.json for unknown distros', () => {
         expect(() => mapOs('linux', 'gentoo2')).toThrow(/shared\/platforms\.json/);
     });

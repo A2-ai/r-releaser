@@ -17,6 +17,14 @@ inputs:
   include_builtin_linking_to_deps:
     description: 'Whether to include packages built into R as specific linking to dependencies'
     default: 'false'
+  no_sys_deps:
+    description: >-
+      If true, claim the binary links nothing beyond the portable runtime contract
+      (https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md)
+      and fail the build when verification finds
+      otherwise or cannot run. Linux-only; ignored with a warning elsewhere. The
+      verified result is recorded in the manifest regardless of this claim.
+    default: 'false'
 
 outputs:
   binary_path:

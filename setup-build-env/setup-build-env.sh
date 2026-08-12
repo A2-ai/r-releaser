@@ -1,15 +1,107 @@
 #!/usr/bin/env bash
 # Installs the compiler toolchain and system libraries for an R package build.
 # Inputs via env: TOOLCHAIN (auto|none), SYSDEPS (auto|none|space-separated
-# distro package names). Runs as-is in containers (root) and on bare-metal
-# runners (non-root with passwordless sudo).
+# distro package names), SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated,
+# auto mode only), PLATFORM (optional resolved platform as <id><major>, e.g.
+# almalinux8; empty detects from /etc/os-release). The distro compiler set and
+# system libraries are linux-only; when the source needs Rust, the toolchain
+# (rustup, stable, minimal profile) installs on linux and macOS, plus xz when
+# a vendored crate archive is present. No-op on Windows. Runs as-is in
+# containers (root) and on bare-metal runners (non-root with passwordless
+# sudo).
 set -euo pipefail
 
 TOOLCHAIN="${TOOLCHAIN:-auto}"
 SYSDEPS="${SYSDEPS:-auto}"
+SYSDEPS_IGNORE="${SYSDEPS_IGNORE:-}"
+SYSDEPS_EXTRA="${SYSDEPS_EXTRA:-}"
+PLATFORM="${PLATFORM:-}"
+OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 
-if [ "$(uname -s)" != "Linux" ]; then
-    echo "::notice::setup-build-env: toolchain/sysdeps management only applies to linux; nothing to do on $(uname -s)"
+case "$TOOLCHAIN" in
+    auto|none) ;;
+    *)
+        echo "::error::setup-build-env: unknown toolchain value \"$TOOLCHAIN\" (expected auto or none)"
+        exit 1
+        ;;
+esac
+
+KERNEL="$(uname -s)"
+if [ "$KERNEL" != "Linux" ] && [ "$KERNEL" != "Darwin" ]; then
+    echo "::notice::setup-build-env: toolchain management only applies to linux and macOS; nothing to do on $KERNEL"
+    exit 0
+fi
+
+needs_rust() {
+    if [ -f src/rust/Cargo.toml ]; then
+        echo "setup-build-env: Rust sources detected (src/rust/Cargo.toml)"
+        return 0
+    fi
+    local cargo_toml=""
+    if [ -d src ]; then
+        cargo_toml="$(find src -name Cargo.toml -print -quit)"
+    fi
+    if [ -n "$cargo_toml" ]; then
+        echo "setup-build-env: Rust sources detected ($cargo_toml)"
+        return 0
+    fi
+    local mk
+    for mk in src/Makevars src/Makevars.in src/Makevars.win.in; do
+        if [ -f "$mk" ] && grep -q cargo "$mk"; then
+            echo "setup-build-env: Rust sources detected ($mk mentions cargo)"
+            return 0
+        fi
+    done
+    return 1
+}
+
+setup_rust() {
+    if ! needs_rust; then
+        return 0
+    fi
+    if [ "$TOOLCHAIN" = "none" ]; then
+        echo "::notice::setup-build-env: Rust sources detected but toolchain=none — skipping Rust toolchain install"
+        return 0
+    fi
+    if command -v cargo >/dev/null 2>&1; then
+        echo "setup-build-env: cargo already on PATH, skipping Rust toolchain install"
+        return 0
+    fi
+    if [ "$KERNEL" = "Linux" ] && ! command -v curl >/dev/null 2>&1; then
+        install_pkgs curl
+    fi
+    echo "setup-build-env: installing the Rust toolchain (stable, minimal profile)"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+    # Empty/unset GITHUB_PATH means a local run; the export covers this script.
+    if [ -n "${GITHUB_PATH:-}" ]; then
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+}
+
+# Independent of needs_rust and the cargo-present skip: a vendored build needs
+# xz even when the rustup install was skipped.
+setup_vendor_xz() {
+    if [ "$TOOLCHAIN" != "auto" ] || [ ! -f src/rust/vendor.tar.xz ]; then
+        return 0
+    fi
+    if command -v xz >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ "$KERNEL" = "Linux" ]; then
+        case "$PM" in
+            apt-get) install_pkgs xz-utils ;;
+            *)       install_pkgs xz ;;
+        esac
+    else
+        echo "::warning::setup-build-env: src/rust/vendor.tar.xz present but xz is not on PATH — the vendored crate unpack will fail"
+    fi
+}
+
+if [ "$KERNEL" = "Darwin" ]; then
+    setup_rust
+    setup_vendor_xz
+    echo "::notice::setup-build-env: package-manager toolchain/sysdeps only apply to linux; skipping on Darwin"
     exit 0
 fi
 
@@ -23,6 +115,10 @@ if [ "$(id -u)" != "0" ]; then
     fi
 fi
 
+as_root() {
+    ${SUDO:+"$SUDO"} "$@"
+}
+
 PM=""
 for candidate in dnf microdnf yum apt-get zypper; do
     if command -v "$candidate" >/dev/null 2>&1; then
@@ -35,7 +131,37 @@ if [ -z "$PM" ]; then
     exit 1
 fi
 
+# One splitting idiom for every list input: read -a never globs, -d '' makes
+# the whole here-string one record so newlines split like spaces, and || true
+# absorbs read's guaranteed non-zero EOF status under set -e.
+SPLIT_WS=()
+split_ws() {
+    SPLIT_WS=()
+    read -r -d '' -a SPLIT_WS <<< "$1" || true
+}
+
+DISTRO_ID="unknown"
+DISTRO_MAJOR="0"
+detect_platform() {
+    if [ -n "$PLATFORM" ]; then
+        if [[ ! "$PLATFORM" =~ ^([a-z]+)([0-9]+)$ ]]; then
+            echo "::error::setup-build-env: malformed platform \"$PLATFORM\" (expected <id><major>, e.g. almalinux8)"
+            exit 1
+        fi
+        DISTRO_ID="${BASH_REMATCH[1]}"
+        DISTRO_MAJOR="${BASH_REMATCH[2]}"
+        return 0
+    fi
+    local fields
+    # shellcheck disable=SC1090
+    fields=$(. "$OS_RELEASE" 2>/dev/null && echo "${ID:-unknown} ${VERSION_ID:-0}") || fields="unknown 0"
+    read -r DISTRO_ID DISTRO_MAJOR <<< "$fields"
+    DISTRO_MAJOR="${DISTRO_MAJOR%%.*}"
+}
+detect_platform
+
 APT_UPDATED=false
+RPM_REPO_FLAGS=()
 install_pkgs() {
     if [ "$#" -eq 0 ]; then
         return 0
@@ -44,16 +170,69 @@ install_pkgs() {
     case "$PM" in
         apt-get)
             if [ "$APT_UPDATED" = false ]; then
-                $SUDO apt-get update -qq
+                as_root apt-get update -qq
                 APT_UPDATED=true
             fi
-            $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
+            as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
             ;;
         zypper)
-            $SUDO zypper --non-interactive install "$@"
+            as_root zypper --non-interactive install "$@"
             ;;
         *)
-            $SUDO "$PM" install -y "$@"
+            as_root "$PM" install -y ${RPM_REPO_FLAGS[@]+"${RPM_REPO_FLAGS[@]}"} "$@"
+            ;;
+    esac
+}
+
+# Most -devel packages on EL distros live outside the base repos: EPEL plus
+# the builder repo, named PowerTools on EL8 and CRB from EL9 on. The builder
+# repo is enabled per-install through --enablerepo, which dnf, microdnf, and
+# yum all accept — unlike dnf config-manager, which the others lack and dnf5
+# renamed. Distro IDs correspond to shared/platforms.json's linux_id_map.
+ensure_rpm_repos() {
+    case "$PM" in
+        dnf|microdnf|yum) ;;
+        *) return 0 ;;
+    esac
+    case "$DISTRO_ID" in
+        almalinux|alma|rocky|centos)
+            local repo
+            case "$DISTRO_MAJOR" in
+                8) repo="powertools" ;;
+                9|10) repo="crb" ;;
+                *)
+                    echo "::notice::setup-build-env: no repo recipe for ${DISTRO_ID}${DISTRO_MAJOR}; installing from configured repos only"
+                    return 0
+                    ;;
+            esac
+            echo "setup-build-env: enabling EPEL and ${repo} on ${DISTRO_ID}${DISTRO_MAJOR}"
+            install_pkgs epel-release
+            RPM_REPO_FLAGS+=("--enablerepo=${repo}")
+            ;;
+        rhel)
+            # Best-effort: RHEL/UBI has no epel-release package, and unentitled
+            # UBI images may lack CRB entirely, so failures warn and continue.
+            local epel_url="https://dl.fedoraproject.org/pub/epel/epel-release-latest-${DISTRO_MAJOR}.noarch.rpm"
+            echo "setup-build-env: enabling EPEL and CRB (best effort) on rhel${DISTRO_MAJOR}"
+            # rpm -ivh fallback because microdnf cannot install from a URL.
+            if ! install_pkgs "$epel_url" && ! as_root rpm -ivh "$epel_url"; then
+                echo "::warning::setup-build-env: could not install EPEL on rhel${DISTRO_MAJOR}; continuing without it"
+            fi
+            local crb_repo repolist
+            crb_repo="codeready-builder-for-rhel-${DISTRO_MAJOR}-$(uname -m)-rpms"
+            # --enablerepo for an undefined repo hard-fails, so probe first.
+            repolist=$(as_root "$PM" repolist --all 2>/dev/null) || repolist=""
+            if [[ "$repolist" == *"$crb_repo"* ]]; then
+                RPM_REPO_FLAGS+=("--enablerepo=${crb_repo}")
+            else
+                echo "::notice::setup-build-env: ${crb_repo} not available on this system; installing without it"
+            fi
+            ;;
+        fedora)
+            # Everything needed is in the main repos.
+            ;;
+        *)
+            echo "::notice::setup-build-env: repo enablement not implemented for ${DISTRO_ID}; installing from configured repos only"
             ;;
     esac
 }
@@ -69,11 +248,14 @@ case "$TOOLCHAIN" in
             *)       install_pkgs gcc gcc-c++ gcc-gfortran make ;;
         esac
         ;;
-    *)
-        echo "::error::setup-build-env: unknown toolchain value \"$TOOLCHAIN\" (expected auto or none)"
-        exit 1
-        ;;
 esac
+
+setup_rust
+setup_vendor_xz
+
+if [ "$SYSDEPS" != "auto" ] && { [ -n "$SYSDEPS_IGNORE" ] || [ -n "$SYSDEPS_EXTRA" ]; }; then
+    echo "::warning::setup-build-env: sysdeps_ignore/sysdeps_extra only apply with sysdeps=auto — ignoring them"
+fi
 
 case "$SYSDEPS" in
     none)
@@ -82,22 +264,39 @@ case "$SYSDEPS" in
     auto)
         if ! command -v rv >/dev/null 2>&1; then
             echo "::warning::setup-build-env: sysdeps=auto requires rv on PATH — skipping system dependency resolution"
-        elif [ "$PM" != "apt-get" ]; then
-            echo "::notice::setup-build-env: rv sysdeps only supports Ubuntu/Debian — skipping sysdeps=auto on this distro. Set an explicit sysdeps map in prism.yml if the build needs system libraries."
         else
             if ! command -v jq >/dev/null 2>&1; then
                 install_pkgs jq
             fi
-            mapfile -t pkgs < <(rv sysdeps --json --only-absent | jq -r '.[]')
+            split_ws "$SYSDEPS_IGNORE"
+            ignore_flags=()
+            for dep in ${SPLIT_WS[@]+"${SPLIT_WS[@]}"}; do
+                ignore_flags+=(--ignore "$dep")
+            done
+            # Assignments first so a failing rv or jq exits the script instead
+            # of silently producing an empty list.
+            sysdeps_json=$(rv sysdeps --json --only-absent ${ignore_flags[@]+"${ignore_flags[@]}"})
+            pkg_lines=$(jq -r '.[]' <<< "$sysdeps_json")
+            split_ws "$pkg_lines"
+            pkgs=(${SPLIT_WS[@]+"${SPLIT_WS[@]}"})
+            # The notice is about what rv resolved, so it precedes the extras.
             if [ "${#pkgs[@]}" -eq 0 ]; then
-                echo "setup-build-env: rv sysdeps reports nothing missing"
-            else
+                echo "::notice::setup-build-env: no system dependencies resolved — either none are required, or this platform is not supported by rv sysdeps"
+            fi
+            split_ws "$SYSDEPS_EXTRA"
+            pkgs+=(${SPLIT_WS[@]+"${SPLIT_WS[@]}"})
+            if [ "${#pkgs[@]}" -gt 0 ]; then
+                ensure_rpm_repos
                 install_pkgs "${pkgs[@]}"
             fi
         fi
         ;;
     *)
-        read -r -a pkgs <<< "$SYSDEPS"
-        install_pkgs "${pkgs[@]}"
+        split_ws "$SYSDEPS"
+        pkgs=(${SPLIT_WS[@]+"${SPLIT_WS[@]}"})
+        if [ "${#pkgs[@]}" -gt 0 ]; then
+            ensure_rpm_repos
+            install_pkgs "${pkgs[@]}"
+        fi
         ;;
 esac

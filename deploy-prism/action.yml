@@ -34,8 +34,11 @@ inputs:
   no_sys_deps:
     description: >-
       If true, declare this package's linux binaries portable across distros and send
-      ?no_sys_deps=true on their POST. Applied only to linux binary uploads; source and
-      non-linux binaries are never flagged. The API verifies portability on ingestion.
+      ?no_sys_deps=true on their POST. Applied only to linux binary uploads whose
+      manifest entry records no_sys_deps=true from build-bin's portability verifier
+      (https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md);
+      a manifest recording false or lacking the field
+      warns and uploads unflagged. Source and non-linux binaries are never flagged.
     required: false
     default: 'false'
   force:
@@ -167,6 +170,8 @@ runs:
           local attempt=0
           local wait_seconds=2
 
+          # ptype is read unconditionally now, because the docs check below needs it
+          # whether or not no_sys_deps was passed.
           local ptype
           ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${MANIFEST}" 2>/dev/null || true)
 
@@ -187,16 +192,28 @@ runs:
             fi
             url="${PRISM_API_URL}/documents/${ppkg}/versions/${pver}"
           elif [ "${NO_SYS_DEPS}" = "true" ]; then
-            # declare linux binaries as portable.
+            # declare linux binaries as portable, but only when build-bin's
+            # verifier confirmed it in the manifest (docs/portability-contract.md).
             # source and non-linux binaries are never marked no_sys_deps, and the
             # API rejects force without no_sys_deps, so both flags stay in this branch.
-            local pos
+            local pos manifest_nsd
             pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${MANIFEST}" 2>/dev/null || true)
             if [ "${ptype}" = "binary" ] && [ "${pos}" = "linux" ]; then
-              params="no_sys_deps=true"
-              if [ "${FORCE}" = "true" ]; then
-                params="${params}&force=true"
-              fi
+              manifest_nsd=$(jq -r --arg f "${file_name}" 'if .[$f] | has("no_sys_deps") then .[$f].no_sys_deps | tostring else "absent" end' "${MANIFEST}" 2>/dev/null || echo "absent")
+              case "${manifest_nsd}" in
+                true)
+                  params="no_sys_deps=true"
+                  if [ "${FORCE}" = "true" ]; then
+                    params="${params}&force=true"
+                  fi
+                  ;;
+                absent)
+                  echo "::warning::${file_name}: no_sys_deps input is true but the manifest has no no_sys_deps field (built by an older build-bin, or verification could not run at build time) — not sending the flag. Rebuild with a current build-bin, passing no_sys_deps so an unverifiable claim fails there with the reason."
+                  ;;
+                *)
+                  echo "::warning::${file_name}: no_sys_deps input is true but build-time verification recorded no_sys_deps=false — not sending the flag. The binary links system libraries; see https://github.com/A2-ai/r-releaser/blob/main/docs/portability-contract.md."
+                  ;;
+              esac
             fi
           fi
           local query="${params:+?${params}}"

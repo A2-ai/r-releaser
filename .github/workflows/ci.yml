@@ -44,3 +44,6 @@ jobs:
         uses: docker://rhysd/actionlint:1.7.7
         with:
           args: -color
+
+      - name: Run shellcheck
+        run: shellcheck setup-build-env/setup-build-env.sh

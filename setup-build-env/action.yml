@@ -1,24 +1,53 @@
 name: 'Setup R package build environment'
 description: >-
   Installs the compiled-language toolchain and system libraries an R package
-  build needs on linux. Driven by the build.toolchain and build.sysdeps
-  settings of a consumer's prism.yml (resolved to this action's inputs by the
-  release workflow's plan job). No-op on macOS and Windows.
+  build needs. When the source needs Rust, installs rustup (stable toolchain,
+  minimal profile) on linux and macOS, plus xz when src/rust/vendor.tar.xz is
+  present; the distro compiler set and system libraries remain linux-only.
+  Driven by the build.toolchain and build.sysdeps settings of a consumer's
+  prism.yml (resolved to this action's inputs by the release workflow's plan
+  job). No-op on Windows.
 inputs:
   toolchain:
     description: >-
-      "auto" installs the distro's default compiler set (C, C++, Fortran,
-      make); "none" skips toolchain setup.
+      "auto" installs what the source needs — the distro's default compiler
+      set (C, C++, Fortran, make) on linux, the Rust toolchain when Rust
+      sources are detected and cargo is absent, and xz for vendored crate
+      archives; "none" skips all toolchain setup.
     required: false
     default: 'auto'
   sysdeps:
     description: >-
       System libraries to install before the build: "auto" resolves them from
-      the dependency tree with `rv sysdeps` (Ubuntu/Debian only — a notice is
-      emitted elsewhere), "none" skips, or a space-separated list of distro
-      package names.
+      the dependency tree with `rv sysdeps`, "none" skips, or a space-separated
+      list of distro package names. Before installing on an EL clone
+      (AlmaLinux/Rocky/CentOS), EPEL is installed and the builder repo
+      (PowerTools on EL8, CRB on EL9+) is enabled for that install via
+      --enablerepo; on RHEL/UBI both are best-effort and skipped with a
+      warning when unavailable.
     required: false
     default: 'auto'
+  sysdeps_ignore:
+    description: >-
+      Space-separated dependency names passed to `rv sysdeps` as --ignore flags,
+      for entries the rules database resolves to package names that do not exist
+      on the target distro. Only applies with sysdeps "auto".
+    required: false
+    default: ''
+  sysdeps_extra:
+    description: >-
+      Space-separated distro package names installed in addition to what
+      sysdeps "auto" resolves, for requirements the rules database omits.
+      Only applies with sysdeps "auto".
+    required: false
+    default: ''
+  platform:
+    description: >-
+      Resolved platform as <id><major> (e.g. almalinux8, rhel9), used to pick
+      the repo set for system dependency installs. Empty detects from
+      /etc/os-release.
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
@@ -27,4 +56,7 @@ runs:
       env:
         TOOLCHAIN: ${{ inputs.toolchain }}
         SYSDEPS: ${{ inputs.sysdeps }}
+        SYSDEPS_IGNORE: ${{ inputs.sysdeps_ignore }}
+        SYSDEPS_EXTRA: ${{ inputs.sysdeps_extra }}
+        PLATFORM: ${{ inputs.platform }}
       run: '"${GITHUB_ACTION_PATH}/setup-build-env.sh"'

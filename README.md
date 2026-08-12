@@ -12,12 +12,24 @@ build-src ──► build-bin (once per platform) ──► merge-manifests ─�
 
 ### setup-build-env
 
-Prepares a linux build environment before `rv sync` runs: installs the
+Prepares the build environment before `rv sync` runs: installs the
 distro's compiler toolchain (`toolchain: auto`, or `none` to skip) and system
-libraries (`sysdeps: auto` resolves them with `rv sysdeps` on Ubuntu/Debian;
-`none` skips; a space-separated package list installs exactly those).
-Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when not root.
-No-op on macOS and Windows.
+libraries (`sysdeps: auto` resolves them with `rv sysdeps`; `none` skips; a
+space-separated package list installs exactly those). With `auto`,
+`sysdeps_ignore` names dependencies to pass as `--ignore` flags (for rules the
+database resolves to nonexistent package names) and `sysdeps_extra` names
+packages to install in addition (for requirements the database omits). Before
+installing system libraries on an EL clone (AlmaLinux/Rocky/CentOS), EPEL is
+installed and the builder repo (PowerTools on EL8, CRB on EL9+) is enabled for
+that install; on RHEL/UBI both are best-effort — EPEL comes from the Fedora
+mirror and CRB is enabled only if the system defines it. An empty `auto` result is
+ambiguous and annotated as such: either nothing is required, or the platform
+is unsupported by `rv sysdeps` (almalinux10 and native Rocky are known
+unsupported). Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when
+not root. The distro toolchain and system libraries are linux-only; with
+`toolchain: auto`, sources that need Rust also get rustup (stable toolchain,
+minimal profile) on linux and macOS, plus xz when `src/rust/vendor.tar.xz` is
+present. No-op on Windows.
 
 ### build-src
 
@@ -39,12 +51,15 @@ Runs `R CMD INSTALL --build` on the source tarball, names the product `{pkg}_{ve
 
 The platform tag embeds the `/etc/os-release` `ID` plus major version (e.g. `linux_almalinux8`). Building on a distro that is not listed in [`shared/platforms.json`](shared/platforms.json) fails immediately, because `deploy-prism` would be unable to map the binary later.
 
+On linux, every shared object in the installed package is verified against the [portability contract](docs/portability-contract.md) (a static `readelf` read of `DT_NEEDED`), and the result is recorded in the manifest as `no_sys_deps`, alongside the highest required `GLIBC_` version as `glibc_max`. When verification cannot run, a claimed build fails and an unclaimed build warns and records neither field.
+
 | Input | Default | Notes |
 |---|---|---|
 | `src_tarball_path` | required | Source tarball from build-src |
 | `library` | required | Library containing the package's dependencies |
 | `linking_to_deps` | `[]` | JSON array from build-src's `linking_to_deps` output |
 | `include_builtin_linking_to_deps` | `false` | When `true`, base/recommended packages ([`builtin_packages.json`](build-bin/builtin_packages.json)) are included in `linked_to`; excluded otherwise |
+| `no_sys_deps` | `false` | Claims binary portability per the [portability contract](docs/portability-contract.md); the build fails when the claim is violated or cannot be verified. Linux-only; ignored with a warning elsewhere |
 | `manifest_path` | `manifest.json` | Merged into, not replaced |
 
 Outputs: `binary_path`, `binary_name`, `manifest_path`.
@@ -75,6 +90,8 @@ Downloads all assets of a GitHub Release, validates `manifest.json` (which must 
 
 Key inputs: `prism_api_url`, `auth_token`, `release_tag` (required); `package_name`, `retry_count`, `dry_run`, `skip` (comma-OR/plus-AND rules over os/os_codename/r_version), `no_sys_deps`, `force`.
 
+`?no_sys_deps=true` is sent only when the `no_sys_deps` input is true **and** the asset's manifest entry records `no_sys_deps: true` from build-bin's verifier; a manifest recording `false` or lacking the field (older build-bin, or build-time verification could not run) warns and uploads unflagged.
+
 ### create-edition
 
 Ensures an "individual package" registry named after the package exists, then creates an **immutable** edition `{package}/{version}` (optionally `?latest=true`). Exits successfully if the edition already exists.
@@ -85,7 +102,7 @@ GET-modify-PUT of an existing **mutable** edition: bumps this package's version,
 
 ## The manifest
 
-`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`; docs entries are just `package`, `version`, and `type: "docs"`, which is how deploy-prism knows to route the asset to the docs endpoint.
+`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`, plus the optional portability fields `no_sys_deps` and `glibc_max` on linux builds; docs entries are just `package`, `version`, and `type: "docs"`, which is how deploy-prism knows to route the asset to the docs endpoint.
 
 ## Development
 

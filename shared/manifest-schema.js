@@ -46,6 +46,12 @@ function validateEntry(filename, entry, errors) {
                 }
             }
         }
+        if ('no_sys_deps' in entry && typeof entry.no_sys_deps !== 'boolean') {
+            errors.push(`${filename}: "no_sys_deps" must be a boolean`);
+        }
+        if ('glibc_max' in entry && (typeof entry.glibc_max !== 'string' || !/^\d+\.\d+(\.\d+)?$/.test(entry.glibc_max))) {
+            errors.push(`${filename}: "glibc_max" must be a version string like "2.28"`);
+        }
     } else if (entry.type === 'docs') {
         // package/version/type are the whole entry; anything extra stays scalar.
         for (const [key, value] of Object.entries(entry)) {

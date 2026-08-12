@@ -49,7 +49,12 @@ if (length(found_yml_files) > 0) {
 }
 
 withr::with_libpaths(lib_path, {
-  options(repos = repo_url)
+  # repo_url is optional: a caller whose library is already fully synced (rv, for
+  # instance) has no repository to name. Blanking the repos option would then be
+  # worse than leaving it alone, so only set it when one was actually passed.
+  if (nzchar(repo_url)) {
+    options(repos = repo_url)
+  }
   withr::with_envvar(new = c("R_LIBS" = lib_path), {
     result <- tryCatch({
       pkgdown::build_site(working_dir)

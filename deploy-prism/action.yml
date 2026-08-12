@@ -154,6 +154,7 @@ runs:
         fi
 
         UPLOAD_URL="${PRISM_API_URL}/packages"
+        MANIFEST="${DOWNLOAD_DIR}/manifest.json"
 
         uploaded_count=0
         failed_count=0
@@ -166,14 +167,31 @@ runs:
           local attempt=0
           local wait_seconds=2
 
-          # declare linux binaries as portable.
-          # source and non-linux binaries are never marked no_sys_deps, and the
-          # API rejects force without no_sys_deps, so both flags stay in this branch.
+          local ptype
+          ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${MANIFEST}" 2>/dev/null || true)
+
+          # Docs tarballs are documents, not packages: they go to
+          # /documents/{package}/versions/{version}. The request itself is the
+          # same raw octet-stream body as a package upload, so only the URL
+          # changes. no_sys_deps/force are package-only flags and never apply.
+          # Assets with no manifest entry keep the default /packages target.
+          local url="${UPLOAD_URL}"
           local params=""
-          if [ "${NO_SYS_DEPS}" = "true" ]; then
-            local ptype pos
-            ptype=$(jq -r --arg f "${file_name}" '.[$f].type // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
-            pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${DOWNLOAD_DIR}/manifest.json" 2>/dev/null || true)
+          if [ "${ptype}" = "docs" ]; then
+            local ppkg pver
+            ppkg=$(jq -r --arg f "${file_name}" '.[$f].package // empty' "${MANIFEST}" 2>/dev/null || true)
+            pver=$(jq -r --arg f "${file_name}" '.[$f].version // empty' "${MANIFEST}" 2>/dev/null || true)
+            if [ -z "${ppkg}" ] || [ -z "${pver}" ]; then
+              echo "::error::Docs entry ${file_name} has no package/version in manifest.json"
+              return 1
+            fi
+            url="${PRISM_API_URL}/documents/${ppkg}/versions/${pver}"
+          elif [ "${NO_SYS_DEPS}" = "true" ]; then
+            # declare linux binaries as portable.
+            # source and non-linux binaries are never marked no_sys_deps, and the
+            # API rejects force without no_sys_deps, so both flags stay in this branch.
+            local pos
+            pos=$(jq -r --arg f "${file_name}" '.[$f].os // empty' "${MANIFEST}" 2>/dev/null || true)
             if [ "${ptype}" = "binary" ] && [ "${pos}" = "linux" ]; then
               params="no_sys_deps=true"
               if [ "${FORCE}" = "true" ]; then
@@ -205,7 +223,7 @@ runs:
               -H "Content-Type: application/octet-stream" \
               -H "X-Filename: ${file_name}" \
               --data-binary "@${file_path}" \
-              "${UPLOAD_URL}${query}" || true)
+              "${url}${query}" || true)
 
             local response_body
             response_body=$(cat "${response_file}" 2>/dev/null || echo "")

@@ -25734,86 +25734,6 @@ module.exports = { parseFields, fieldValue, parseDescription, updateDescription 
 
 /***/ }),
 
-/***/ 6305:
-/***/ ((module) => {
-
-// Dependency-free runtime validation of the manifest format documented in
-// shared/schemas/manifest.schema.json — keep the two in sync. No third-party
-// validator here because deploy-prism runs this without an npm install.
-
-const SCALAR_TYPES = new Set(['string', 'number', 'boolean']);
-
-function isPlainObject(value) {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function requireString(entry, key, filename, errors) {
-    if (typeof entry[key] !== 'string' || entry[key].length === 0) {
-        errors.push(`${filename}: "${key}" must be a non-empty string`);
-    }
-}
-
-function validateEntry(filename, entry, errors) {
-    if (!isPlainObject(entry)) {
-        errors.push(`${filename}: entry must be an object`);
-        return;
-    }
-
-    requireString(entry, 'package', filename, errors);
-    requireString(entry, 'version', filename, errors);
-
-    if (entry.type === 'source') {
-        if (typeof entry.needs_compilation !== 'boolean') {
-            errors.push(`${filename}: "needs_compilation" must be a boolean`);
-        }
-        for (const [key, value] of Object.entries(entry)) {
-            if (key === 'needs_compilation') continue;
-            if (!SCALAR_TYPES.has(typeof value)) {
-                errors.push(`${filename}: metadata field "${key}" must be a string/number/boolean`);
-            }
-        }
-    } else if (entry.type === 'binary') {
-        for (const key of ['os', 'os_codename', 'arch', 'r_version']) {
-            requireString(entry, key, filename, errors);
-        }
-        if (!isPlainObject(entry.linked_to)) {
-            errors.push(`${filename}: "linked_to" must be an object`);
-        } else {
-            for (const [dep, version] of Object.entries(entry.linked_to)) {
-                if (typeof version !== 'string') {
-                    errors.push(`${filename}: linked_to["${dep}"] must be a string`);
-                }
-            }
-        }
-    } else if (entry.type === 'docs') {
-        // package/version/type are the whole entry; anything extra stays scalar.
-        for (const [key, value] of Object.entries(entry)) {
-            if (!SCALAR_TYPES.has(typeof value)) {
-                errors.push(`${filename}: metadata field "${key}" must be a string/number/boolean`);
-            }
-        }
-    } else {
-        errors.push(`${filename}: "type" must be "source", "binary" or "docs" (got ${JSON.stringify(entry.type)})`);
-    }
-}
-
-// Returns a list of human-readable problems; empty means valid.
-function validateManifest(manifest) {
-    if (!isPlainObject(manifest)) {
-        return ['manifest must be a JSON object keyed by artifact filename'];
-    }
-    const errors = [];
-    for (const [filename, entry] of Object.entries(manifest)) {
-        validateEntry(filename, entry, errors);
-    }
-    return errors;
-}
-
-module.exports = { validateManifest };
-
-
-/***/ }),
-
 /***/ 5229:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -25954,6 +25874,14 @@ module.exports = require("net");
 
 /***/ }),
 
+/***/ 1421:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:child_process");
+
+/***/ }),
+
 /***/ 7598:
 /***/ ((module) => {
 
@@ -25975,6 +25903,22 @@ module.exports = require("node:events");
 
 "use strict";
 module.exports = require("node:fs");
+
+/***/ }),
+
+/***/ 8161:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:os");
+
+/***/ }),
+
+/***/ 6760:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:path");
 
 /***/ }),
 
@@ -26103,6 +26047,151 @@ module.exports = require("worker_threads");
 
 "use strict";
 module.exports = require("zlib");
+
+/***/ }),
+
+/***/ 5848:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(3024);
+const os = __nccwpck_require__(8161);
+const path = __nccwpck_require__(6760);
+const { spawnSync } = __nccwpck_require__(1421);
+
+// Maximum compressed tarball size the PRISM docs endpoint accepts (200 MB).
+const MAX_TARBALL_BYTES = 200 * 1024 * 1024;
+
+// pkgdown driver script, run with Rscript and 5 positional args:
+// <pkg> <ver> <working_dir> <lib_path> <repo_url>.
+//
+// The _pkgdown.yml normalization stays in R rather than JS because `yaml` is
+// already available in the build library, and reimplementing YAML round-tripping
+// in the action would be worse. PRISM renders these docs inside its own chrome
+// and at its own paths, so `url`, `template`, `redirects` and `destination` are
+// dropped and bootstrap 5 is forced — anything the package declared there would
+// either break navigation or be ignored.
+const PKGDOCS_BUILD_R = `args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 5) {
+  stop("expected: <pkg> <ver> <working_dir> <lib_path> <repo_url>")
+}
+pkg_name <- args[1]
+ver <- args[2]
+working_dir <- args[3]
+lib_path <- args[4]
+repo_url <- args[5]
+
+.libPaths(lib_path)
+library(yaml)
+
+found_yml_files <- list.files(
+  path = working_dir,
+  pattern = "_pkgdown.yml$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+if (length(found_yml_files) > 0) {
+  yml_path <- found_yml_files[1]
+  message("Found _pkgdown.yml at: ", yml_path)
+  pkgdownyml <- read_yaml(yml_path)
+  pkgdownyml <- pkgdownyml[!names(pkgdownyml) %in% c("url", "template", "redirects", "destination")]
+  pkgdownyml <- c(list(template = list(bootstrap = 5L)), pkgdownyml)
+  write_yaml(pkgdownyml, yml_path)
+} else {
+  yml_path <- file.path(working_dir, "_pkgdown.yml")
+  pkgdownyml <- list(template = list(bootstrap = 5L))
+  write_yaml(pkgdownyml, yml_path)
+  message("Created minimal _pkgdown.yml at: ", yml_path)
+}
+
+withr::with_libpaths(lib_path, {
+  options(repos = repo_url)
+  withr::with_envvar(new = c("R_LIBS" = lib_path), {
+    result <- tryCatch({
+      pkgdown::build_site(working_dir)
+      "ok"
+    }, error = function(e) {
+      message("build_site with examples failed: ", conditionMessage(e))
+      message("Retrying with examples = FALSE")
+      pkgdown::build_site(working_dir, examples = FALSE)
+      "ok-no-examples"
+    })
+    message("build_site result: ", result)
+  })
+})
+
+print("Session info:")
+sessionInfo()
+`;
+
+// The asset name is both the release asset name and the manifest key, so it has
+// to be unique per package/version and distinct from the source tarball and any
+// binary.
+function defaultAssetName(pkgName, pkgVersion) {
+    return `${pkgName}_${pkgVersion}_docs.tar.gz`;
+}
+
+function writeBuildScript(dir) {
+    const targetDir = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'build-docs-'));
+    const scriptPath = path.join(targetDir, 'pkgdocs-build.R');
+    fs.writeFileSync(scriptPath, PKGDOCS_BUILD_R);
+    return scriptPath;
+}
+
+function buildSite(pkgName, pkgVersion, workingDir, libraryPath, repoUrl) {
+    const scriptPath = writeBuildScript();
+    const args = [scriptPath, pkgName, pkgVersion, workingDir, libraryPath, repoUrl];
+
+    console.log(`Running "Rscript ${args.join(' ')}"`);
+
+    const result = spawnSync('Rscript', args, { stdio: 'pipe', encoding: 'utf8' });
+    if (result.error) {
+        throw Error(`Failed to start Rscript: ${result.error.message}`);
+    }
+    // pkgdown logs progress to stderr, so it is worth printing even on success.
+    if (result.stdout) console.log(result.stdout);
+    if (result.stderr) console.log(result.stderr);
+    if (result.status !== 0) {
+        throw Error(`pkgdown::build_site exited with ${result.status}:\n${result.stderr}`);
+    }
+}
+
+function tarDocs(docsDir, tarballPath) {
+    const result = spawnSync('tar', ['-czf', tarballPath, '-C', docsDir, '.'], {
+        stdio: 'pipe',
+        encoding: 'utf8',
+        // COPYFILE_DISABLE=1 stops macOS bsd-tar from emitting AppleDouble
+        // `._*` sidecars from extended attributes.
+        env: { ...process.env, COPYFILE_DISABLE: '1' },
+    });
+    if (result.error) {
+        throw Error(`Failed to start tar: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+        throw Error(`tar exited with ${result.status}:\n${result.stderr}`);
+    }
+    return tarballPath;
+}
+
+// The server rejects anything above the cap, so fail here with the real size
+// rather than after a long upload.
+function checkTarballSize(tarballPath) {
+    const size = fs.statSync(tarballPath).size;
+    if (size > MAX_TARBALL_BYTES) {
+        throw Error(`Docs tarball is ${size} bytes, which exceeds the 200 MB cap accepted by PRISM`);
+    }
+    return size;
+}
+
+module.exports = {
+    MAX_TARBALL_BYTES,
+    PKGDOCS_BUILD_R,
+    defaultAssetName,
+    writeBuildScript,
+    buildSite,
+    tarDocs,
+    checkTarballSize,
+};
+
 
 /***/ }),
 
@@ -27773,86 +27862,54 @@ var __webpack_exports__ = {};
 const core = __nccwpck_require__(6618);
 const fs = __nccwpck_require__(3024);
 const path = __nccwpck_require__(6928);
-const { writeManifest } = __nccwpck_require__(5229);
-const { validateManifest } = __nccwpck_require__(6305);
+const { parseDescriptionFile, updateManifest } = __nccwpck_require__(5229);
+const { defaultAssetName, buildSite, tarDocs, checkTarballSize } = __nccwpck_require__(5848);
 
-function findManifests(dir, glob) {
-    const results = [];
-    // Convert glob to regex: **/manifest.json -> match manifest.json at any depth
-    const pattern = new RegExp(
-        '^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '{{GLOBSTAR}}').replace(/\*/g, '[^/]*').replace(/\{\{GLOBSTAR\}\}/g, '.*') + '$'
-    );
-
-    function walk(currentDir) {
-        for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
-            const full = path.join(currentDir, entry.name);
-            if (entry.isDirectory()) {
-                walk(full);
-            } else {
-                const rel = path.relative(dir, full);
-                if (pattern.test(rel)) {
-                    results.push(full);
-                }
-            }
-        }
-    }
-
-    walk(dir);
-    return results;
-}
-
+// Builds the package's pkgdown site and packs it into a tarball that
+// deploy-prism posts to PRISM's docs endpoint.
 try {
-    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-    const manifestDirInput = core.getInput('manifest_dir') || 'manifests';
-    const manifestGlob = core.getInput('manifest_glob') || '**/manifest.json';
-    const manifestDir = path.resolve(workspace, manifestDirInput);
+    const libraryPath = core.getInput('library');
+    const workingDir = core.getInput('working_dir') || '.';
+    const repoUrl = core.getInput('repo_url');
+    const manifestPath = core.getInput('manifest_path') || 'manifest.json';
 
-    console.log(`Workspace: ${workspace}`);
-    console.log(`Manifest directory: ${manifestDir}`);
+    const desc = parseDescriptionFile(path.join(workingDir, 'DESCRIPTION'));
+    const pkgName = desc['Package'];
+    const pkgVersion = desc['Version'];
+    const assetName = core.getInput('asset_name') || defaultAssetName(pkgName, pkgVersion);
 
-    if (!fs.existsSync(manifestDir)) {
-        throw new Error(`Manifest directory "${manifestDir}" does not exist`);
+    console.log("Library:", libraryPath);
+    console.log("Working directory:", workingDir);
+    console.log("Repo URL:", repoUrl);
+    console.log("Package:", `${pkgName} ${pkgVersion}`);
+    console.log("Asset name:", assetName);
+
+    buildSite(pkgName, pkgVersion, workingDir, libraryPath, repoUrl);
+
+    const docsDir = path.join(workingDir, 'docs');
+    if (!fs.existsSync(docsDir)) {
+        throw Error(`pkgdown did not produce a docs directory at ${docsDir}`);
     }
 
-    const files = findManifests(manifestDir, manifestGlob);
-    if (files.length === 0) {
-        throw new Error(`No files matched "${manifestGlob}" in "${manifestDir}"`);
-    }
+    const tarballPath = path.resolve(assetName);
+    tarDocs(docsDir, tarballPath);
+    const size = checkTarballSize(tarballPath);
+    console.log(`Wrote ${assetName} (${size} bytes)`);
 
-    console.log(`Found ${files.length} manifest file(s):`);
+    core.setOutput("docs_tarball_path", tarballPath);
+    core.setOutput("docs_tarball_name", assetName);
 
-    const merged = {};
-    const sources = {};
-    for (const file of files) {
-        let data;
-        try {
-            data = JSON.parse(fs.readFileSync(file, 'utf8'));
-        } catch (err) {
-            throw new Error(`Failed to parse manifest "${file}": ${err.message}`);
-        }
-        const count = Object.keys(data).length;
-        console.log(`  ${file} (${count} entry/entries)`);
-        for (const [key, entry] of Object.entries(data)) {
-            if (key in merged && JSON.stringify(merged[key]) !== JSON.stringify(entry)) {
-                throw new Error(
-                    `Manifest entry "${key}" in "${file}" conflicts with the entry already merged from "${sources[key]}"`
-                );
-            }
-            merged[key] = entry;
-            sources[key] = file;
-        }
-    }
+    // Merged rather than written so this composes with a source or binary entry
+    // already at manifest_path.
+    updateManifest(manifestPath, {
+        [assetName]: {
+            package: pkgName,
+            version: pkgVersion,
+            type: 'docs',
+        },
+    });
+    core.setOutput("manifest_path", path.resolve(manifestPath));
 
-    const problems = validateManifest(merged);
-    if (problems.length > 0) {
-        throw new Error(`Merged manifest is invalid:\n${problems.join('\n')}`);
-    }
-
-    const outputPath = path.resolve(workspace, 'manifest.json');
-    writeManifest(outputPath, merged);
-    console.log(`Wrote merged manifest with ${Object.keys(merged).length} entries`);
-
-    core.setOutput('manifest_path', outputPath);
 } catch (error) {
     core.setFailed(error.message);
 }

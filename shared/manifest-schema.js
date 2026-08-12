@@ -46,8 +46,15 @@ function validateEntry(filename, entry, errors) {
                 }
             }
         }
+    } else if (entry.type === 'docs') {
+        // package/version/type are the whole entry; anything extra stays scalar.
+        for (const [key, value] of Object.entries(entry)) {
+            if (!SCALAR_TYPES.has(typeof value)) {
+                errors.push(`${filename}: metadata field "${key}" must be a string/number/boolean`);
+            }
+        }
     } else {
-        errors.push(`${filename}: "type" must be "source" or "binary" (got ${JSON.stringify(entry.type)})`);
+        errors.push(`${filename}: "type" must be "source", "binary" or "docs" (got ${JSON.stringify(entry.type)})`);
     }
 }
 

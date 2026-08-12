@@ -1,0 +1,31 @@
+name: 'r-releaser docs builder'
+description: 'Builds a pkgdown site for an R package and packs it into a docs tarball'
+
+inputs:
+  library:
+    description: 'R library path holding pkgdown and the package dependencies'
+    required: true
+  working_dir:
+    description: 'Package source root'
+    default: '.'
+  repo_url:
+    description: "Value for R's repos option during the build"
+    default: ''
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+    default: 'manifest.json'
+  asset_name:
+    description: 'Name of the docs tarball (defaults to {package}_{version}_docs.tar.gz)'
+    default: ''
+
+outputs:
+  docs_tarball_path:
+    description: 'Path to the docs tarball'
+  docs_tarball_name:
+    description: 'Name of the docs tarball'
+  manifest_path:
+    description: 'Path to the manifest JSON file'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

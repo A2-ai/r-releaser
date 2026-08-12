@@ -52,8 +52,15 @@ function validateEntry(filename, entry, errors) {
         if ('glibc_max' in entry && (typeof entry.glibc_max !== 'string' || !/^\d+\.\d+(\.\d+)?$/.test(entry.glibc_max))) {
             errors.push(`${filename}: "glibc_max" must be a version string like "2.28"`);
         }
+    } else if (entry.type === 'docs') {
+        // package/version/type are the whole entry; anything extra stays scalar.
+        for (const [key, value] of Object.entries(entry)) {
+            if (!SCALAR_TYPES.has(typeof value)) {
+                errors.push(`${filename}: metadata field "${key}" must be a string/number/boolean`);
+            }
+        }
     } else {
-        errors.push(`${filename}: "type" must be "source" or "binary" (got ${JSON.stringify(entry.type)})`);
+        errors.push(`${filename}: "type" must be "source", "binary" or "docs" (got ${JSON.stringify(entry.type)})`);
     }
 }
 

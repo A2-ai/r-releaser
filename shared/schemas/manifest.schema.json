@@ -2,12 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/A2-ai/r-releaser/main/shared/schemas/manifest.schema.json",
   "title": "r-releaser manifest",
-  "description": "Metadata sidecar produced by build-src/build-bin, merged by merge-manifests, attached to the GitHub Release as manifest.json, and consumed by deploy-prism. Keys are release asset filenames; values describe the artifact. Runtime validation is implemented dependency-free in shared/manifest-schema.js and must be kept in sync with this file.",
+  "description": "Metadata sidecar produced by build-src/build-bin/build-docs, merged by merge-manifests, attached to the GitHub Release as manifest.json, and consumed by deploy-prism. Keys are release asset filenames; values describe the artifact. Runtime validation is implemented dependency-free in shared/manifest-schema.js and must be kept in sync with this file.",
   "type": "object",
   "additionalProperties": {
     "oneOf": [
       { "$ref": "#/definitions/sourceEntry" },
-      { "$ref": "#/definitions/binaryEntry" }
+      { "$ref": "#/definitions/binaryEntry" },
+      { "$ref": "#/definitions/docsEntry" }
     ]
   },
   "definitions": {
@@ -41,6 +42,17 @@
         },
         "no_sys_deps": { "type": "boolean" },
         "glibc_max": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" }
+      },
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "docsEntry": {
+      "type": "object",
+      "description": "Written by build-docs for the pkgdown site tarball. deploy-prism posts these assets to {prism_api_url}/documents/{package}/versions/{version} instead of /packages.",
+      "required": ["package", "version", "type"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "type": { "const": "docs" }
       },
       "additionalProperties": { "type": ["string", "number", "boolean"] }
     }

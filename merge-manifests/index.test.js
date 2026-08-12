@@ -25,6 +25,12 @@ const BINARY_ENTRY = {
     linked_to: { Rcpp: '1.0.11' },
 };
 
+const DOCS_ENTRY = {
+    package: 'pkg',
+    version: '1.0.0',
+    type: 'docs',
+};
+
 let workspace;
 beforeEach(() => {
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-manifests-test-'));
@@ -65,6 +71,19 @@ describe('merge-manifests', () => {
             'pkg_1.0.0.tar.gz',
             'pkg_1.0.0_linux_alma8_x64_4.4.tar.gz',
         ]);
+    });
+
+    it('merges a docs entry alongside source and binary entries', () => {
+        writeInput('source', { 'pkg_1.0.0.tar.gz': SOURCE_ENTRY });
+        writeInput('alma8', { 'pkg_1.0.0_linux_alma8_x64_4.4.tar.gz': BINARY_ENTRY });
+        writeInput('docs', { 'pkg_1.0.0_docs.tar.gz': DOCS_ENTRY });
+
+        const result = runMerge();
+        expect(result.status).toBe(0);
+
+        const merged = JSON.parse(fs.readFileSync(path.join(workspace, 'manifest.json'), 'utf8'));
+        expect(merged['pkg_1.0.0_docs.tar.gz']).toEqual(DOCS_ENTRY);
+        expect(Object.keys(merged)).toHaveLength(3);
     });
 
     it('tolerates identical duplicate entries', () => {

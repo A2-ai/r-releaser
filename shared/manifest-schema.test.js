@@ -42,7 +42,7 @@ describe('validateManifest', () => {
 
     it('rejects unknown or missing type', () => {
         const errors = validateManifest({ 'x.tar.gz': { package: 'x', version: '1', type: 'sauce' } });
-        expect(errors.join('\n')).toContain('"type" must be "source" or "binary"');
+        expect(errors.join('\n')).toContain('"type" must be "source", "binary" or "docs"');
     });
 
     it('requires binary platform fields and string linked_to versions', () => {
@@ -82,6 +82,25 @@ describe('validateManifest', () => {
     it('rejects non-scalar source metadata', () => {
         const errors = validateManifest({
             'x.tar.gz': { package: 'x', version: '1', type: 'source', needs_compilation: true, extra: { nested: true } },
+        });
+        expect(errors.join('\n')).toContain('metadata field "extra"');
+    });
+
+    it('accepts a docs entry', () => {
+        expect(validateManifest({
+            'pkg_1.0.0_docs.tar.gz': { package: 'pkg', version: '1.0.0', type: 'docs' },
+        })).toEqual([]);
+    });
+
+    it('requires package and version on docs entries', () => {
+        const errors = validateManifest({ 'pkg_docs.tar.gz': { type: 'docs' } });
+        expect(errors.join('\n')).toContain('"package" must be a non-empty string');
+        expect(errors.join('\n')).toContain('"version" must be a non-empty string');
+    });
+
+    it('rejects non-scalar docs metadata', () => {
+        const errors = validateManifest({
+            'pkg_1.0.0_docs.tar.gz': { package: 'pkg', version: '1.0.0', type: 'docs', extra: ['a'] },
         });
         expect(errors.join('\n')).toContain('metadata field "extra"');
     });

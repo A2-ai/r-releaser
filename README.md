@@ -66,13 +66,29 @@ On linux, every shared object in the installed package is verified against the [
 
 Outputs: `binary_path`, `binary_name`, `manifest_path`.
 
+### build-docs
+
+Builds the package's [pkgdown](https://pkgdown.r-lib.org) site with `Rscript`, tars the resulting `docs/` directory into `{package}_{version}_docs.tar.gz`, and **merges** a `docs` entry into the manifest.
+
+Any `_pkgdown.yml` found under `working_dir` is normalized first: `url`, `template`, `redirects` and `destination` are stripped and `template: {bootstrap: 5}` is prepended, because PRISM serves the site inside its own chrome and at its own paths. A package without a `_pkgdown.yml` gets a minimal one. `pkgdown::build_site` is retried with `examples = FALSE` if the first attempt fails, and the compressed tarball is rejected above 200 MB — the limit the docs endpoint accepts.
+
+| Input | Default | Notes |
+|---|---|---|
+| `library` | required | R library path holding pkgdown and the package's dependencies |
+| `working_dir` | `.` | Package source root (where `DESCRIPTION` lives) |
+| `repo_url` | `''` | Value for R's `repos` option during the build |
+| `manifest_path` | `manifest.json` | Merged into, not replaced |
+| `asset_name` | `{package}_{version}_docs.tar.gz` | Release asset name and manifest key, so it must not collide with the source tarball or any binary |
+
+Outputs: `docs_tarball_path`, `docs_tarball_name`, `manifest_path`.
+
 ### merge-manifests
 
 Collects per-job manifests (uploaded as workflow artifacts) from `manifest_dir` matching `manifest_glob`, merges them, validates the result against the [manifest schema](shared/schemas/manifest.schema.json), and writes `manifest.json` at the workspace root. Conflicting duplicate keys fail the merge; identical duplicates are tolerated.
 
 ### deploy-prism
 
-Downloads all assets of a GitHub Release, validates `manifest.json` (which must be one of the assets), rewrites each binary's embedded `DESCRIPTION` with canonical `OS`/`Arch`/`LinkedTo` fields, and uploads every asset to `{prism_api_url}/packages`. Retries 429/5xx/network errors with doubling backoff; 409 responses count as idempotent success (a `covered_by_existing` 409 warns and can be resolved with `force: true` alongside `no_sys_deps`).
+Downloads all assets of a GitHub Release, validates `manifest.json` (which must be one of the assets), rewrites each binary's embedded `DESCRIPTION` with canonical `OS`/`Arch`/`LinkedTo` fields, and uploads every asset to `{prism_api_url}/packages`. Assets whose manifest entry is a `docs` entry go to `{prism_api_url}/documents/{package}/versions/{version}` instead, with the same raw `application/octet-stream` body (`no_sys_deps`/`force` never apply to them); an asset with no manifest entry is still posted to `/packages`. Retries 429/5xx/network errors with doubling backoff; 409 responses count as idempotent success (a `covered_by_existing` 409 warns and can be resolved with `force: true` alongside `no_sys_deps`).
 
 Key inputs: `prism_api_url`, `auth_token`, `release_tag` (required); `package_name`, `retry_count`, `dry_run`, `skip` (comma-OR/plus-AND rules over os/os_codename/r_version), `no_sys_deps`, `force`.
 
@@ -88,12 +104,12 @@ GET-modify-PUT of an existing **mutable** edition: bumps this package's version,
 
 ## The manifest
 
-`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`, plus the optional portability fields `no_sys_deps` and `glibc_max` on linux builds.
+`manifest.json` is a JSON object keyed by release-asset filename, defined by [`shared/schemas/manifest.schema.json`](shared/schemas/manifest.schema.json) and validated at merge and deploy time by the dependency-free checker in [`shared/manifest-schema.js`](shared/manifest-schema.js). Source entries carry provenance metadata (`GitOrigin`, `GitSHA`, `PrismRemote*`); binary entries carry `os`, `os_codename`, `arch`, `r_version`, and `linked_to`, plus the optional portability fields `no_sys_deps` and `glibc_max` on linux builds; docs entries are just `package`, `version`, and `type: "docs"`, which is how deploy-prism knows to route the asset to the docs endpoint.
 
 ## Development
 
 ```sh
-npm ci          # single workspace install (shared, build-src, build-bin, merge-manifests)
+npm ci          # single workspace install (shared, build-src, build-bin, build-docs, merge-manifests)
 npm test        # vitest across all packages
 npm run bundle  # rebuild every action's dist/ with ncc — commit the result
 ```

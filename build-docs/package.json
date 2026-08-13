@@ -1,0 +1,14 @@
+{
+  "name": "@r-releaser/build-docs",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "bundle": "ncc build index.js --license ../LICENSE"
+  },
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  }
+}

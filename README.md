@@ -27,9 +27,11 @@ ambiguous and annotated as such: either nothing is required, or the platform
 is unsupported by `rv sysdeps` (almalinux10 and native Rocky are known
 unsupported). Detects dnf/microdnf/yum/apt-get/zypper and uses sudo only when
 not root. The distro toolchain and system libraries are linux-only; with
-`toolchain: auto`, sources that need Rust also get rustup (stable toolchain,
-minimal profile) on linux and macOS, plus xz when `src/rust/vendor.tar.xz` is
-present. No-op on Windows.
+`toolchain: auto`, rustup (stable toolchain, minimal profile) and xz install
+on linux and macOS unless `rust: none` — a dependency compiled from source
+during `rv sync` may need them, which is unknowable up front. With
+`rust: none`, xz still installs when `src/rust/vendor.tar.xz` is present.
+No-op on Windows.
 
 ### build-src
 

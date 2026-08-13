@@ -379,95 +379,62 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
     const rustEnv = { TOOLCHAIN: 'auto', SYSDEPS: 'none', PLATFORM: 'fedora42' };
     const noRustupCalls = (calls) => calls.every((c) => !c.startsWith('curl ') && !c.startsWith('sh '));
 
-    describe('rust detection', () => {
-        it('detects the rextendr layout via src/rust/Cargo.toml', () => {
-            const { code, stdout, calls } = runScript({ env: rustEnv, files: { 'src/rust/Cargo.toml': '' } });
-            expect(code).toBe(0);
-            expect(stdout).toContain('Rust sources detected (src/rust/Cargo.toml)');
-            expect(calls).toContain(rustupCurl);
-            expect(calls).toContain(rustupSh);
-        });
-
-        it('detects a Cargo.toml anywhere under src/', () => {
-            const { code, stdout, calls } = runScript({ env: rustEnv, files: { 'src/myext/Cargo.toml': '' } });
-            expect(code).toBe(0);
-            expect(stdout).toContain('Rust sources detected (src/myext/Cargo.toml)');
-            expect(calls).toContain(rustupCurl);
-        });
-
-        for (const mk of ['src/Makevars', 'src/Makevars.in', 'src/Makevars.win.in']) {
-            it(`detects a cargo mention in ${mk}`, () => {
-                const { code, stdout, calls } = runScript({
-                    env: rustEnv,
-                    files: { [mk]: 'all:\n\tcargo build --release\n' },
-                });
-                expect(code).toBe(0);
-                expect(stdout).toContain(`Rust sources detected (${mk} mentions cargo)`);
-                expect(calls).toContain(rustupCurl);
-            });
-        }
-
-        it('does not install Rust for C-only sources', () => {
-            const { code, stdout, calls } = runScript({
-                env: rustEnv,
-                files: { 'src/foo.c': '', 'src/Makevars': 'PKG_CFLAGS = -O2\n' },
-            });
-            expect(code).toBe(0);
-            expect(stdout).not.toContain('Rust sources detected');
-            expect(noRustupCalls(calls)).toBe(true);
-        });
-
-        it('does not install Rust without a src directory', () => {
+    describe('rust install', () => {
+        it('installs the Rust toolchain with toolchain=auto and no rust sources', () => {
             const { code, stdout, calls } = runScript({ env: rustEnv });
             expect(code).toBe(0);
-            expect(stdout).not.toContain('Rust sources detected');
-            expect(noRustupCalls(calls)).toBe(true);
-        });
-    });
-
-    describe('rust install mechanics', () => {
-        it('appends the cargo bin dir to GITHUB_PATH', () => {
-            const { code, githubPath } = runScript({ env: rustEnv, files: { 'src/rust/Cargo.toml': '' } });
-            expect(code).toBe(0);
-            expect(githubPath.trim().endsWith('/.cargo/bin')).toBe(true);
-        });
-
-        it('still installs with GITHUB_PATH unset', () => {
-            const { code, calls, githubPath } = runScript({
-                env: { ...rustEnv, GITHUB_PATH: '' },
-                files: { 'src/rust/Cargo.toml': '' },
-            });
-            expect(code).toBe(0);
+            expect(stdout).toContain('installing the Rust toolchain');
+            expect(calls).toContain(rustupCurl);
             expect(calls).toContain(rustupSh);
-            expect(githubPath).toBe('');
         });
 
         it('skips the install when cargo is already on PATH', () => {
-            const { code, stdout, calls } = runScript({
-                env: rustEnv,
-                files: { 'src/rust/Cargo.toml': '' },
-                stubs: { cargo: 'exit 0' },
-            });
+            const { code, stdout, calls } = runScript({ env: rustEnv, stubs: { cargo: 'exit 0' } });
             expect(code).toBe(0);
             expect(stdout).toContain('cargo already on PATH');
             expect(noRustupCalls(calls)).toBe(true);
         });
 
-        it('notices detected Rust sources when toolchain=none', () => {
-            const { code, stdout, calls } = runScript({
+        it('skips the install with rust=none', () => {
+            const { code, stdout, calls } = runScript({ env: { ...rustEnv, RUST: 'none' } });
+            expect(code).toBe(0);
+            expect(stdout).toContain('rust=none, skipping Rust toolchain install');
+            expect(noRustupCalls(calls)).toBe(true);
+        });
+
+        it('skips the install with toolchain=none', () => {
+            const { code, calls } = runScript({
                 env: { TOOLCHAIN: 'none', SYSDEPS: 'none', PLATFORM: 'fedora42' },
-                files: { 'src/rust/Cargo.toml': '' },
             });
             expect(code).toBe(0);
-            expect(stdout).toContain('Rust sources detected but toolchain=none');
             expect(noRustupCalls(calls)).toBe(true);
+        });
+
+        it('rejects an unknown rust value', () => {
+            const { code, stdout } = runScript({ env: { ...rustEnv, RUST: 'bogus' } });
+            expect(code).not.toBe(0);
+            expect(stdout).toContain('unknown rust value');
+        });
+    });
+
+    describe('rust install mechanics', () => {
+        it('appends the cargo bin dir to GITHUB_PATH', () => {
+            const { code, githubPath } = runScript({ env: rustEnv });
+            expect(code).toBe(0);
+            expect(githubPath.trim().endsWith('/.cargo/bin')).toBe(true);
+        });
+
+        it('still installs with GITHUB_PATH unset', () => {
+            const { code, calls, githubPath } = runScript({ env: { ...rustEnv, GITHUB_PATH: '' } });
+            expect(code).toBe(0);
+            expect(calls).toContain(rustupSh);
+            expect(githubPath).toBe('');
         });
 
         it('installs curl with the package manager before rustup when missing', () => {
             const { code, calls } = runScript({
                 omit: ['curl'],
                 env: { ...rustEnv, PROVIDES: 'curl' },
-                files: { 'src/rust/Cargo.toml': '' },
             });
             expect(code).toBe(0);
             const installIndex = calls.indexOf('dnf install -y curl');
@@ -479,10 +446,7 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
 
     describe('darwin', () => {
         it('installs rustup without touching a package manager', () => {
-            const { code, stdout, calls } = runScript({
-                env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto' },
-                files: { 'src/rust/Cargo.toml': '' },
-            });
+            const { code, stdout, calls } = runScript({ env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto' } });
             expect(code).toBe(0);
             expect(calls).toContain(rustupCurl);
             expect(calls).toContain(rustupSh);
@@ -493,7 +457,6 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
         it('skips the install when the runner ships cargo', () => {
             const { code, stdout, calls } = runScript({
                 env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto' },
-                files: { 'src/rust/Cargo.toml': '' },
                 stubs: { cargo: 'exit 0' },
             });
             expect(code).toBe(0);
@@ -501,10 +464,12 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
             expect(noRustupCalls(calls)).toBe(true);
         });
 
-        it('exits cleanly without rust sources', () => {
-            const { code, stdout, calls } = runScript({ env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto' } });
+        it('skips rust with rust=none', () => {
+            const { code, stdout, calls } = runScript({
+                env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto', RUST: 'none' },
+            });
             expect(code).toBe(0);
-            expect(stdout).toContain('package-manager toolchain/sysdeps only apply to linux; skipping on Darwin');
+            expect(stdout).toContain('rust=none, skipping Rust toolchain install');
             expect(noRustupCalls(calls)).toBe(true);
         });
 
@@ -521,6 +486,13 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
             });
             expect(code).toBe(0);
             expect(stdout).toContain('vendor.tar.xz present but xz is not on PATH');
+        });
+
+        it('notices missing xz without a vendored archive', () => {
+            const { code, stdout } = runScript({ env: { UNAME_S: 'Darwin', TOOLCHAIN: 'auto' } });
+            expect(code).toBe(0);
+            expect(stdout).toContain('::notice::setup-build-env: xz is not on PATH');
+            expect(stdout).not.toContain('::warning::');
         });
 
         it('stays quiet about xz when it is available', () => {
@@ -546,11 +518,11 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
         });
     });
 
-    describe('vendored crate xz on linux', () => {
+    describe('xz on linux', () => {
         const vendorFiles = { 'src/rust/vendor.tar.xz': '' };
 
-        it('installs xz for a vendored crate archive', () => {
-            const { code, calls } = runScript({ env: rustEnv, files: vendorFiles });
+        it('installs xz when absent', () => {
+            const { code, calls } = runScript({ env: rustEnv });
             expect(code).toBe(0);
             expect(calls).toContain('dnf install -y xz');
         });
@@ -559,7 +531,6 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
             const { code, calls } = runScript({
                 pm: 'apt-get',
                 env: { ...rustEnv, PLATFORM: 'ubuntu24' },
-                files: vendorFiles,
             });
             expect(code).toBe(0);
             expect(calls).toContain('apt-get install -y --no-install-recommends xz-utils');
@@ -569,16 +540,21 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
             const { code, calls } = runScript({
                 pm: 'zypper',
                 env: { ...rustEnv, PLATFORM: 'opensuse15' },
-                files: vendorFiles,
             });
             expect(code).toBe(0);
             expect(calls).toContain('zypper --non-interactive install xz');
         });
 
-        it('does not install xz without the vendor archive', () => {
-            const { code, calls } = runScript({ env: rustEnv, files: { 'src/rust/Cargo.toml': '' } });
+        it('does not install xz with rust=none and no vendor archive', () => {
+            const { code, calls } = runScript({ env: { ...rustEnv, RUST: 'none' } });
             expect(code).toBe(0);
             expect(calls.some((c) => c.includes('xz'))).toBe(false);
+        });
+
+        it('installs xz with rust=none when the vendor archive is present', () => {
+            const { code, calls } = runScript({ env: { ...rustEnv, RUST: 'none' }, files: vendorFiles });
+            expect(code).toBe(0);
+            expect(calls).toContain('dnf install -y xz');
         });
 
         it('does not install xz when toolchain=none', () => {
@@ -591,7 +567,7 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
         });
 
         it('skips the install when xz is already on PATH', () => {
-            const { code, calls } = runScript({ env: rustEnv, files: vendorFiles, stubs: { xz: 'exit 0' } });
+            const { code, calls } = runScript({ env: rustEnv, stubs: { xz: 'exit 0' } });
             expect(code).toBe(0);
             expect(calls.some((c) => c.includes('install') && c.includes('xz'))).toBe(false);
         });

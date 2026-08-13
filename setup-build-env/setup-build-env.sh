@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Installs the compiler toolchain and system libraries for an R package build.
-# Inputs via env: TOOLCHAIN (auto|none), SYSDEPS (auto|none|space-separated
-# distro package names), SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated,
-# auto mode only), PLATFORM (optional resolved platform as <id><major>, e.g.
-# almalinux8; empty detects from /etc/os-release). The distro compiler set and
-# system libraries are linux-only; when the source needs Rust, the toolchain
-# (rustup, stable, minimal profile) installs on linux and macOS, plus xz when
-# a vendored crate archive is present. No-op on Windows. Runs as-is in
-# containers (root) and on bare-metal runners (non-root with passwordless
-# sudo).
+# Inputs via env: TOOLCHAIN (auto|none), RUST (auto|none, applies only with
+# TOOLCHAIN=auto), SYSDEPS (auto|none|space-separated distro package names),
+# SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated, auto mode only), PLATFORM
+# (optional resolved platform as <id><major>, e.g. almalinux8; empty detects
+# from /etc/os-release). The distro compiler set and system libraries are
+# linux-only; the Rust toolchain (rustup, stable, minimal profile) and xz
+# install on linux and macOS. Rust is provisioned unconditionally under
+# RUST=auto: a dependency compiled from source during rv sync may need it, and
+# that requirement is invisible before the toolchain is already needed. No-op
+# on Windows. Runs as-is in containers (root) and on bare-metal runners
+# (non-root with passwordless sudo).
 set -euo pipefail
 
 TOOLCHAIN="${TOOLCHAIN:-auto}"
+RUST="${RUST:-auto}"
 SYSDEPS="${SYSDEPS:-auto}"
 SYSDEPS_IGNORE="${SYSDEPS_IGNORE:-}"
 SYSDEPS_EXTRA="${SYSDEPS_EXTRA:-}"
@@ -26,41 +29,26 @@ case "$TOOLCHAIN" in
         ;;
 esac
 
+case "$RUST" in
+    auto|none) ;;
+    *)
+        echo "::error::setup-build-env: unknown rust value \"$RUST\" (expected auto or none)"
+        exit 1
+        ;;
+esac
+
 KERNEL="$(uname -s)"
 if [ "$KERNEL" != "Linux" ] && [ "$KERNEL" != "Darwin" ]; then
     echo "::notice::setup-build-env: toolchain management only applies to linux and macOS; nothing to do on $KERNEL"
     exit 0
 fi
 
-needs_rust() {
-    if [ -f src/rust/Cargo.toml ]; then
-        echo "setup-build-env: Rust sources detected (src/rust/Cargo.toml)"
-        return 0
-    fi
-    local cargo_toml=""
-    if [ -d src ]; then
-        cargo_toml="$(find src -name Cargo.toml -print -quit)"
-    fi
-    if [ -n "$cargo_toml" ]; then
-        echo "setup-build-env: Rust sources detected ($cargo_toml)"
-        return 0
-    fi
-    local mk
-    for mk in src/Makevars src/Makevars.in src/Makevars.win.in; do
-        if [ -f "$mk" ] && grep -q cargo "$mk"; then
-            echo "setup-build-env: Rust sources detected ($mk mentions cargo)"
-            return 0
-        fi
-    done
-    return 1
-}
-
 setup_rust() {
-    if ! needs_rust; then
+    if [ "$TOOLCHAIN" != "auto" ]; then
         return 0
     fi
-    if [ "$TOOLCHAIN" = "none" ]; then
-        echo "::notice::setup-build-env: Rust sources detected but toolchain=none — skipping Rust toolchain install"
+    if [ "$RUST" = "none" ]; then
+        echo "setup-build-env: rust=none, skipping Rust toolchain install"
         return 0
     fi
     if command -v cargo >/dev/null 2>&1; then
@@ -79,10 +67,16 @@ setup_rust() {
     export PATH="$HOME/.cargo/bin:$PATH"
 }
 
-# Independent of needs_rust and the cargo-present skip: a vendored build needs
-# xz even when the rustup install was skipped.
+# Unconditional under RUST=auto: dependencies' vendored crate archives unpack
+# during rv sync, after this script runs, so no file can be checked up front.
+# Under RUST=none a vendored archive in the checked-out source still needs xz
+# even though the rustup install is skipped (e.g. cargo preinstalled), hence
+# the file gate.
 setup_vendor_xz() {
-    if [ "$TOOLCHAIN" != "auto" ] || [ ! -f src/rust/vendor.tar.xz ]; then
+    if [ "$TOOLCHAIN" != "auto" ]; then
+        return 0
+    fi
+    if [ "$RUST" = "none" ] && [ ! -f src/rust/vendor.tar.xz ]; then
         return 0
     fi
     if command -v xz >/dev/null 2>&1; then
@@ -93,8 +87,10 @@ setup_vendor_xz() {
             apt-get) install_pkgs xz-utils ;;
             *)       install_pkgs xz ;;
         esac
-    else
+    elif [ -f src/rust/vendor.tar.xz ]; then
         echo "::warning::setup-build-env: src/rust/vendor.tar.xz present but xz is not on PATH — the vendored crate unpack will fail"
+    else
+        echo "::notice::setup-build-env: xz is not on PATH — a dependency's vendored crate archive would fail to unpack during rv sync"
     fi
 }
 

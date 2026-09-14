@@ -18,8 +18,10 @@ libraries (`sysdeps: auto` resolves them with `rv sysdeps`; `none` skips; a
 space-separated package list installs exactly those). With `auto`,
 `sysdeps_ignore` names dependencies to pass as `--ignore` flags (for rules the
 database resolves to nonexistent package names) and `sysdeps_extra` names
-packages to install in addition (for requirements the database omits). Before
-installing system libraries on an EL clone (AlmaLinux/Rocky/CentOS), EPEL is
+packages to install in addition (for requirements the database omits).
+`rv_config` names the rv config file `rv sysdeps` should read (as
+`--config-file`), for repos whose release syncs a file other than
+`rproject.toml`; empty uses rv's default. Before installing system libraries on an EL clone (AlmaLinux/Rocky/CentOS), EPEL is
 installed and the builder repo (PowerTools on EL8, CRB on EL9+) is enabled for
 that install; on RHEL/UBI both are best-effort — EPEL comes from the Fedora
 mirror and CRB is enabled only if the system defines it. An empty `auto` result is

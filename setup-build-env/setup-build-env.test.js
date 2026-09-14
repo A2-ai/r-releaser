@@ -279,6 +279,24 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
         });
     });
 
+    describe('rv config', () => {
+        it('passes rv_config to rv sysdeps as --config-file', () => {
+            const { code, calls } = runScript({
+                env: { PLATFORM: 'fedora42', SYSDEPS: 'auto', RV_CONFIG: 'release/rproject.toml' },
+            });
+            expect(code).toBe(0);
+            expect(calls).toContain('rv --config-file release/rproject.toml sysdeps --json --only-absent');
+        });
+
+        it('calls rv sysdeps without --config-file when rv_config is empty', () => {
+            const { code, calls } = runScript({
+                env: { PLATFORM: 'fedora42', SYSDEPS: 'auto' },
+            });
+            expect(code).toBe(0);
+            expect(calls).toContain('rv sysdeps --json --only-absent');
+        });
+    });
+
     describe('sysdeps=auto resolution', () => {
         it('emits the ambiguity notice even when extras are present', () => {
             const { code, stdout, calls } = runScript({
@@ -371,6 +389,15 @@ describe.skipIf(!bashPath)('setup-build-env.sh', () => {
             });
             expect(code).toBe(0);
             expect(stdout).toContain('only apply with sysdeps=auto');
+        });
+
+        it('warns when rv_config is set outside sysdeps=auto', () => {
+            const { code, stdout, calls } = runScript({
+                env: { PLATFORM: 'fedora42', SYSDEPS: 'none', RV_CONFIG: 'release/rproject.toml' },
+            });
+            expect(code).toBe(0);
+            expect(stdout).toContain('only apply with sysdeps=auto');
+            expect(calls.some((c) => c.startsWith('rv '))).toBe(false);
         });
     });
 

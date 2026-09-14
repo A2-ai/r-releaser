@@ -4,7 +4,9 @@
 # TOOLCHAIN=auto), SYSDEPS (auto|none|space-separated distro package names),
 # SYSDEPS_IGNORE and SYSDEPS_EXTRA (space-separated, auto mode only), PLATFORM
 # (optional resolved platform as <id><major>, e.g. almalinux8; empty detects
-# from /etc/os-release). The distro compiler set and system libraries are
+# from /etc/os-release), RV_CONFIG (optional rv config file path passed to
+# `rv sysdeps` as --config-file; empty uses rv's default rproject.toml, auto
+# mode only). The distro compiler set and system libraries are
 # linux-only; the Rust toolchain (rustup, stable, minimal profile) and xz
 # install on linux and macOS. Rust is provisioned unconditionally under
 # RUST=auto: a dependency compiled from source during rv sync may need it, and
@@ -19,6 +21,7 @@ SYSDEPS="${SYSDEPS:-auto}"
 SYSDEPS_IGNORE="${SYSDEPS_IGNORE:-}"
 SYSDEPS_EXTRA="${SYSDEPS_EXTRA:-}"
 PLATFORM="${PLATFORM:-}"
+RV_CONFIG="${RV_CONFIG:-}"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 
 case "$TOOLCHAIN" in
@@ -249,8 +252,8 @@ esac
 setup_rust
 setup_vendor_xz
 
-if [ "$SYSDEPS" != "auto" ] && { [ -n "$SYSDEPS_IGNORE" ] || [ -n "$SYSDEPS_EXTRA" ]; }; then
-    echo "::warning::setup-build-env: sysdeps_ignore/sysdeps_extra only apply with sysdeps=auto — ignoring them"
+if [ "$SYSDEPS" != "auto" ] && { [ -n "$SYSDEPS_IGNORE" ] || [ -n "$SYSDEPS_EXTRA" ] || [ -n "$RV_CONFIG" ]; }; then
+    echo "::warning::setup-build-env: sysdeps_ignore/sysdeps_extra/rv_config only apply with sysdeps=auto — ignoring them"
 fi
 
 case "$SYSDEPS" in
@@ -269,9 +272,13 @@ case "$SYSDEPS" in
             for dep in ${SPLIT_WS[@]+"${SPLIT_WS[@]}"}; do
                 ignore_flags+=(--ignore "$dep")
             done
+            config_flags=()
+            if [ -n "$RV_CONFIG" ]; then
+                config_flags=(--config-file "$RV_CONFIG")
+            fi
             # Assignments first so a failing rv or jq exits the script instead
             # of silently producing an empty list.
-            sysdeps_json=$(rv sysdeps --json --only-absent ${ignore_flags[@]+"${ignore_flags[@]}"})
+            sysdeps_json=$(rv ${config_flags[@]+"${config_flags[@]}"} sysdeps --json --only-absent ${ignore_flags[@]+"${ignore_flags[@]}"})
             pkg_lines=$(jq -r '.[]' <<< "$sysdeps_json")
             split_ws "$pkg_lines"
             pkgs=(${SPLIT_WS[@]+"${SPLIT_WS[@]}"})
